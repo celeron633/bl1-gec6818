@@ -98,9 +98,9 @@ BL1（AArch32，SRAM 0xFFFF0200）   时钟、DDR、CCI、TZPC/TZASC/GIC 安全�
    |  在 DEVICEADDR（0x10200）读 u-boot-direct.img 的 NSIH2（0x050/0x058/0x060）
    |  -> 头拷到 LoadAddr，u-boot.bin 放到 LoadAddr+0x400 = 0x43C00000（DDR）
    |  -> 把 u-boot 入口写到 stage2 下方，设置 TIEOFF：CPU0 切 AArch64、
-   |     复位地址 0xFFFF8000，然后 CPU0 热复位
+   |     复位地址 0xFFFF9000，然后 CPU0 热复位
    v
-stage2（AArch64 EL3，SRAM 0xFFFF8000，常驻）   src/stage2_main.c
+stage2（AArch64 EL3，SRAM 0xFFFF9000，常驻）   src/stage2_main.c
    |  EL3 向量表 + PSCI（src/psci.c），副核上电后停在 EL3 等 PSCI CPU_ON，
    |  最后 eret 进入 EL2 非安全态
    v

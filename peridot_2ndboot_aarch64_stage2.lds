@@ -12,7 +12,7 @@ ENTRY(Startup)
 
 SECTIONS
 {
-	. = 0x00000000FFFF8000;
+	. = 0x00000000FFFF9000;
 	. = ALIGN(4);
 	.text :
 	{
@@ -50,4 +50,4 @@ SECTIONS
 	__bss_end__ = .;
 }
 
-ASSERT(Startup == 0x00000000FFFF8000, "Startup must be at 0x00000000FFFF8000, STAGE2_AARCH64_ADDR, where BL1 resets into")
+ASSERT(Startup == 0x00000000FFFF9000, "Startup must be at 0x00000000FFFF9000, STAGE2_AARCH64_ADDR, where BL1 resets into")

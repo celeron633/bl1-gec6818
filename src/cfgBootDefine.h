@@ -70,7 +70,11 @@
  * STAGE2_AARCH64_SIGNATURE, [1] = u-boot entry - written by AArch32 BL1
  * before the reset (SRAM survives a CPU-only warm reset, registers don't).
  */
-#define STAGE2_AARCH64_ADDR (0xFFFF8000)
+/*
+ * 0xFFFF9000: leaves AArch32 BL1 about 6.6KB below the handoff words and
+ * stage2 about 5KB below STAGE2_LIMIT (tools/mk_bl1_image.py checks both).
+ */
+#define STAGE2_AARCH64_ADDR (0xFFFF9000)
 #define STAGE2_HANDOFF_ADDR (STAGE2_AARCH64_ADDR - 0x10)
 #endif
 
