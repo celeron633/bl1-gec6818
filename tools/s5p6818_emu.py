@@ -63,7 +63,7 @@ DDR_BASE, DDR_SIZE = 0x40000000, 0x40000000
 MMIO_RANGES = [(0xC0000000, 0x00400000), (0xE0000000, 0x00100000)]
 
 CLKPWR = 0xC0010000
-CLKMODEREG0, PWRMODE, CPUWARMRESETREQ = 0x000, 0x228, 0x2AC
+CLKMODEREG0, PWRMODE, SYSRSTCONFIG, CPUWARMRESETREQ = 0x000, 0x228, 0x23C, 0x2AC
 TIEOFF = 0xC0011000
 TIEOFF_AARCH64 = 0x13C      # TIEOFFREG[79]: bit 12+n = CPUn AArch64
 TIEOFF_RVBAR0 = 0x140       # TIEOFFREG[80]: CPU0 RVBAR >> 2
@@ -75,6 +75,7 @@ CCI400 = 0xE0090000
 TIMER = 0xC0017000
 GMAC = 0xC0060000
 GICD = 0xC0009000
+TZPC0 = 0xC0301000          # R0SIZE @0x000: secure part of the SRAM
 MLC0 = 0xC0102000
 # register -> dirty flag: MLCCONTROLT, RGB layer 0 and 1 MLCCONTROL
 MLC_DIRTY = {MLC0: 1 << 3, MLC0 + 0x24: 1 << 4, MLC0 + 0x58: 1 << 4}
@@ -445,6 +446,7 @@ class Board:
                     for i, b in enumerate(SDMMC_BASES)}
         self.uarts = {b: UART(i, self) for i, b in enumerate(UART_BASES)}
         self.timer = Timer()
+        self.regs[CLKPWR + SYSRSTCONFIG] = 5    # boot mode pins: SDMMC
         self.regs[DDRPHY + 0x04C] = 0x492       # SHIFTC_CON reset value
         self.regs[DDRPHY + 0x3AC] = 0x00000001  # VERSION_INFO
 
@@ -820,6 +822,14 @@ def install_hooks(board, uc, info):
     def on_block(uc, addr, size, _):
         if addr in watch:
             watch.pop(addr)()
+        if SRAM_BASE <= addr < SRAM_BASE + SRAM_SIZE and board.aarch64 and \
+           nonsecure_fetch_from_secure_sram(board, uc, addr):
+            board.stop_reason = (
+                f"non-secure fetch from secure SRAM at {syms(addr)}: TZPC0 "
+                f"R0SIZE=0x{board.regs.get(TZPC0, 0):x} makes it secure-only, "
+                f"the real chip faults here (silently: the vectors are in "
+                f"that SRAM too)")
+            uc.emu_stop()
         if board.args.trace and addr in syms.starts and addr != last[0]:
             last[0] = addr      # once per loop over a labelled block
             sys.stdout.write(f"\n[trace] {syms.starts[addr]}")
@@ -844,6 +854,18 @@ def install_hooks(board, uc, info):
 
     uc.hook_add(UC_HOOK_MEM_UNMAPPED, on_unmapped)
 
+
+
+def nonsecure_fetch_from_secure_sram(board, uc, addr):
+    """TrustZone, which Unicorn doesn't model: TZPC0's R0SIZE makes the
+    first R0SIZE * 4KB of the internal SRAM (0x200: all of it)
+    secure-only, and a non-secure access there faults."""
+    r0size = board.regs.get(TZPC0, 0)
+    if not r0size or current_el(board) == 3:
+        return False
+    if r0size != 0x200 and addr - SRAM_BASE >= r0size * 0x1000:
+        return False
+    return bool(uc.cpr_read(3, 6, 1, 1, 0) & 1)                 # SCR_EL3.NS
 
 
 def impdef_sysreg(board, uc):

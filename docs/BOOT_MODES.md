@@ -141,7 +141,7 @@ make u-boot-direct.img            # 不是 fip-nonsecure.img，原因见下
 
 BootROM 执行 NSIH 头里的向量，直接把核心复位成 AArch64、从 0xFFFF0200 开始跑
 BL1，所以不需要 stage2：BL1 本身常驻 EL3 处理 PSCI（同一份 `src/psci.c`），
-副核上电后停在 EL3，最后经 `SwitchToEL2()` 进入 u-boot。u-boot 镜像
+副核上电后停在 EL3，最后由 `EnterNonSecure()` 从 EL3 直接 eret 到 u-boot（EL2 非安全态）。u-boot 镜像
 （`u-boot-direct.img`）和烧录方式与上面相同，只需一套 `aarch64-none-elf` 工具链：
 
 ```
@@ -150,7 +150,16 @@ make clean && make          # config.mak 的默认值就是这个配置
 
 这个配置曾经完全不出串口，原因是 2KB 对齐的异常向量表把 `.text` 连同 `Startup`
 推到了 0xFFFF0800，而 NSIH 向量复位到的是 0xFFFF0200。现在向量表放在单独的段里，
-链接脚本也用 `ASSERT` 保证 `Startup` 在 0xFFFF0200。修复后尚未上板验证。
+链接脚本也用 `ASSERT` 保证 `Startup` 在 0xFFFF0200。
+
+上板后又发现停在 `Launch to 0x43C00000, currently EL3`，之后再无输出。原因是
+BL1 原来用 `SwitchToEL2()` 以 eret 进入 EL2 非安全态后**返回 BootMain 继续执行**，
+而 `SetTZPC()` 把整块片内 SRAM 设成了只允许安全态访问（`TZPC_R0SIZE_ALL`），
+BL1 的代码、栈、异常向量都在里面，eret 后第一次取指就出错，而且没有任何打印。
+现在 BL1 一直留在 EL3，最后一行串口输出是 `entering u-boot at 0x43C00000, EL2
+non-secure`，然后直接 eret 到 DDR 里的 u-boot。SRAM 保持只允许安全态访问，
+常驻的 PSCI 代码也因此不会被非安全态改写。模拟器（`tools/s5p6818_emu.py`）
+会对非安全态从安全 SRAM 取指报错。
 
 ### 纯 AArch32：`OPMODE=aarch32 UBOOT_ARCH=aarch32`
 

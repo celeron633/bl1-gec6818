@@ -63,7 +63,7 @@ extern int memtester_main(unsigned int start, unsigned int end);
 
 extern int CRC_Check(void* buf, unsigned int size, unsigned int ref_crc);
 #if defined(SKIP_ATF)
-extern void SwitchToEL2(void);
+extern void EnterNonSecure(unsigned long entry, unsigned long context);
 extern void psciInit(U32 bootCpu);
 #endif
 #if defined(BOOT_LOGO)
@@ -503,12 +503,21 @@ void BootMain(U32 CPUID)
 		 * chain: pTBI->LAUNCHADDR points straight at the next stage
 		 * (e.g. u-boot), which expects to run at EL2 non-secure like
 		 * BL31 would normally hand it off - not at EL3, which is
-		 * where we still are here. See aarch64_libs.S SwitchToEL2().
-		 * This eret's and *returns here*, now running at EL2NS, so
-		 * the pLaunch() call below still happens as normal.
+		 * where we still are here.
+		 *
+		 * eret straight from EL3 to the entry. BL1 must not run
+		 * another instruction non-secure: SetTZPC() makes all of the
+		 * internal SRAM (BL1's code, stack and the resident PSCI
+		 * handler) secure-only, so a non-secure fetch from it faults
+		 * - and the fault vectors are in that SRAM too. The old
+		 * SwitchToEL2()-and-return did exactly that and hung silently
+		 * right after "Launch to" on the board.
 		 */
-		SwitchToEL2();
-		SYSMSG("after SwitchToEL2: EL%d\r\n", GetCurrentSMode());
+		SYSMSG("entering u-boot at 0x%08X, EL2 non-secure\r\n",
+		       (MPTRS)pLaunch);
+		temp = 0x10000000;
+		while (!DebugIsUartTxDone() && temp--);
+		EnterNonSecure((MPTRS)pLaunch, 0);
 #endif
 #if defined(SKIP_ATF) && defined(aarch32) && !defined(UBOOT_AARCH32)
 		/* u-boot is AArch64 and wants a resident EL3 for PSCI: hand
