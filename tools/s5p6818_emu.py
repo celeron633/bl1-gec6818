@@ -20,9 +20,10 @@ What is emulated:
     (or --sd-image). u-boot calls that port "mmc 1"; its "mmc 0" (eMMC,
     SDMMC2) has nothing attached.
   - PWM timer counting at 1 MHz host time (u-boot's time base).
-  - LCD, as pictures only: with --screenshot, every time MLC0 is enabled
-    (top dirty flag written) its background and XRGB8888 RGB layers are
-    rendered from DDR to PREFIX-N.png, and once more at the end.
+  - LCD, as pictures only: with --screenshot, every time MLC0 or one of
+    its RGB layers is updated (dirty flag written) its background and
+    XRGB8888 RGB layers are rendered from DDR to PREFIX-N.png if the
+    picture changed, and once more at the end.
   - PLL/DDR/CCI/GMAC status polls report "done" (GMAC: no PHY). Everything
     else is plain read-back-what-was-written storage, so DDR training
     reports failure and BL1 carries on anyway.
@@ -72,7 +73,8 @@ CCI400 = 0xE0090000
 TIMER = 0xC0017000
 GMAC = 0xC0060000
 MLC0 = 0xC0102000
-MLC_TOP_DIRTY = 1 << 3
+# register -> dirty flag: MLCCONTROLT, RGB layer 0 and 1 MLCCONTROL
+MLC_DIRTY = {MLC0: 1 << 3, MLC0 + 0x24: 1 << 4, MLC0 + 0x58: 1 << 4}
 
 # Unicorn/QEMU exception numbers (UC_HOOK_INTR)
 EXCEPTIONS = {1: "undefined instruction", 2: "SVC", 3: "prefetch abort",
@@ -431,7 +433,7 @@ class Board:
                             if args.send else b"")
         self.uc, self.aarch64 = None, False
         self.impdef = {}
-        self.screens = 0
+        self.screens, self.last_screen = 0, None
 
         nsih = sd[0x200:0x400]
         port = nsih[0x50] if len(nsih) > 0x50 else 0
@@ -527,15 +529,14 @@ class Board:
             dev.write(addr & 0xFFF, size, value)
             return
         self.regs[addr & ~3] = value
-        if addr == MLC0 and value & MLC_TOP_DIRTY and self.args.screenshot:
-            self.screens += 1
-            self.screenshot(f"{self.args.screenshot}-{self.screens}.png")
+        if value & MLC_DIRTY.get(addr, 0) and self.args.screenshot:
+            self.screenshot()
         if addr == CLKPWR + CPUWARMRESETREQ and value & 1:
             self.regs[addr] = value & ~1
             self.reset_request = True
             uc.emu_stop()
 
-    def screenshot(self, path):
+    def screenshot(self, path=None):
         """Render MLC0 as the panel would show it: background color, then
         RGB layers 0 and 1 if enabled (XRGB8888 only), clipped to the
         screen size."""
@@ -571,6 +572,12 @@ class Board:
                 rgb[0::3], rgb[1::3], rgb[2::3] = row[2::4], row[1::4], row[0::4]
                 o = (y * w + sx) * 3
                 img[o:o + n * 3] = rgb
+        if path is None:
+            if img == self.last_screen:
+                return
+            self.screens += 1
+            path = f"{self.args.screenshot}-{self.screens}.png"
+        self.last_screen = img
         write_png(path, w, h, img)
         log(f"screenshot {path} ({w}x{h})")
 
@@ -942,8 +949,8 @@ def main():
                         "label)")
     p.add_argument("--trace-sd", action="store_true", help="print SD commands")
     p.add_argument("--screenshot", metavar="PREFIX",
-                   help="save the LCD (MLC0) as PREFIX-N.png each time it is "
-                        "enabled, and as PREFIX-final.png at the end")
+                   help="save the LCD (MLC0) as PREFIX-N.png each time it "
+                        "changes, and as PREFIX-final.png at the end")
     p.add_argument("--log-mmio", action="store_true",
                    help="print every non-UART MMIO access")
     args = p.parse_args()

@@ -23,6 +23,7 @@
 #define putchar DebugPutch
 
 int printf(const char *format, ...);
+int sprint_va(char *out, const char *format, va_list *args);
 
 #define UartPrintf printf
 #endif

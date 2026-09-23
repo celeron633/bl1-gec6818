@@ -69,11 +69,13 @@ Add `BOOT_PORT=emmc` to boot from eMMC instead of SD. The no-ATF
 configurations need u-boot's `u-boot-direct.img` (`make u-boot-direct.img`
 in u-boot_gec6818), not `fip-nonsecure.img`.
 
-Right after DDR init, BL1 turns on the RGB LCD (AT070TN92, 800x480) and
-prints `BOOT_LOGO_TEXT` in the middle of it (`src/display.c`, about 2.8KB
-including the font), until u-boot sets up the display for its own logo.
+Right after DDR init, BL1 turns on the RGB LCD (AT070TN92, 800x480),
+shows `BOOT_LOGO_TEXT` as a title and then one line per boot step (DDR
+done, loading u-boot, loaded size/address, jumping to it), pausing
+`BOOT_LOGO_DELAY_MS` (default 500) after each so they can be read. It stays
+until u-boot sets up the display for its own logo (`src/display.c`).
 `make BOOT_LOGO=n` leaves it out, `make BOOT_LOGO_TEXT='...'` changes the
-text. The backlight pad (GPIOD1/PWM0) is left alone unless you pass
+title, `make BOOT_LOGO_DELAY_MS=0` removes the pauses. The backlight pad (GPIOD1/PWM0) is left alone unless you pass
 `LCD_BACKLIGHT=high` or `LCD_BACKLIGHT=low`, because nobody has checked
 on hardware yet which level turns it on.
 
@@ -226,10 +228,11 @@ make clean && make OPMODE=aarch32 SKIP_ATF=n CROSS_TOOL=arm-linux-gnueabi-   # A
 加 `BOOT_PORT=emmc` 改为从 eMMC 启动。不走 ATF 的两种配置要配 u-boot 的
 `u-boot-direct.img`（在 u-boot_gec6818 里 `make u-boot-direct.img`），不是 `fip-nonsecure.img`。
 
-DDR 初始化完成后，BL1 会点亮 RGB 屏（AT070TN92，800x480），在屏幕中间显示
-`BOOT_LOGO_TEXT`（`src/display.c`，连字库约 2.8KB），直到 u-boot 重新初始化显示、
-画它自己的 logo。`make BOOT_LOGO=n` 去掉这个功能，`make BOOT_LOGO_TEXT='...'`
-改文字。背光脚（GPIOD1/PWM0）默认不动，要驱动它就加 `LCD_BACKLIGHT=high` 或
+DDR 初始化完成后，BL1 会点亮 RGB 屏（AT070TN92，800x480），先显示标题
+`BOOT_LOGO_TEXT`，再每个启动步骤一行（DDR 完成、开始读 u-boot、读到的大小和地址、
+跳转），每行之后停 `BOOT_LOGO_DELAY_MS`（默认 500）毫秒方便看清，一直保留到 u-boot
+重新初始化显示、画它自己的 logo（`src/display.c`）。`make BOOT_LOGO=n` 去掉这个功能，
+`make BOOT_LOGO_TEXT='...'` 改标题，`make BOOT_LOGO_DELAY_MS=0` 去掉停顿。背光脚（GPIOD1/PWM0）默认不动，要驱动它就加 `LCD_BACKLIGHT=high` 或
 `LCD_BACKLIGHT=low`——哪个电平是亮，还没在板子上确认过。
 
 每次 push，GitHub Actions 会编译默认配置（以及配套的 `u-boot-direct.img`），打包成

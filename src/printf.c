@@ -199,7 +199,7 @@ static int printl(char **out, long i, int b, int sg, int width, int pad,
 }
 #endif
 
-static int print(char **out, const char *format, va_list args)
+static int print(char **out, const char *format, va_list *args)
 {
 	register int width, pad;
 	register int pc = 0;
@@ -234,22 +234,22 @@ static int print(char **out, const char *format, va_list args)
 				}
 				if (lflag) {
 					if (*format == 'd') {
-						pc += printl(out, va_arg(args, long), 10,
+						pc += printl(out, va_arg(*args, long), 10,
 							     1, width, pad, 'a');
 						continue;
 					}
 					if (*format == 'x') {
-						pc += printl(out, va_arg(args, long), 16,
+						pc += printl(out, va_arg(*args, long), 16,
 							     0, width, pad, 'a');
 						continue;
 					}
 					if (*format == 'X') {
-						pc += printl(out, va_arg(args, long), 16,
+						pc += printl(out, va_arg(*args, long), 16,
 							     0, width, pad, 'A');
 						continue;
 					}
 					if (*format == 'u') {
-						pc += printl(out, va_arg(args, long), 10,
+						pc += printl(out, va_arg(*args, long), 10,
 							     0, width, pad, 'a');
 						continue;
 					}
@@ -257,34 +257,34 @@ static int print(char **out, const char *format, va_list args)
 			}
 #endif
 			if (*format == 's') {
-				register char *s = va_arg(args, char *);
+				register char *s = va_arg(*args, char *);
 				pc += prints(out, s ? s : "(null)", width, pad);
 				continue;
 			}
 			if (*format == 'd') {
-				pc += printi(out, va_arg(args, int), 10, 1,
+				pc += printi(out, va_arg(*args, int), 10, 1,
 					     width, pad, 'a');
 				continue;
 			}
 			if (*format == 'x') {
-				pc += printi(out, va_arg(args, int), 16, 0,
+				pc += printi(out, va_arg(*args, int), 16, 0,
 					     width, pad, 'a');
 				continue;
 			}
 			if (*format == 'X') {
-				pc += printi(out, va_arg(args, int), 16, 0,
+				pc += printi(out, va_arg(*args, int), 16, 0,
 					     width, pad, 'A');
 				continue;
 			}
 			if (*format == 'u') {
-				pc += printi(out, va_arg(args, int), 10, 0,
+				pc += printi(out, va_arg(*args, int), 10, 0,
 					     width, pad, 'a');
 				continue;
 			}
 			if (*format == 'c') {
 				/* char are converted to int then pushed on the
 				 * stack */
-				scr[0] = (char)va_arg(args, int);
+				scr[0] = (char)va_arg(*args, int);
 				scr[1] = '\0';
 				pc += prints(out, scr, width, pad);
 				continue;
@@ -297,16 +297,29 @@ static int print(char **out, const char *format, va_list args)
 	}
 	if (out)
 		**out = '\0';
-	va_end(args);
 	return pc;
 }
 
 int printf(const char *format, ...)
 {
 	va_list args;
+	int pc;
 
 	va_start(args, format);
-	return print(0, format, args);
+	pc = print(0, format, &args);
+	va_end(args);
+	return pc;
+}
+
+/*
+ * vsprintf() with the va_list passed by pointer: on AArch64 a va_list is
+ * a struct, and passing one by value makes GCC copy it with a memcpy()
+ * call, which BL1 doesn't have. No length limit: out must hold whatever
+ * format expands to.
+ */
+int sprint_va(char *out, const char *format, va_list *args)
+{
+	return print(&out, format, args);
 }
 
 #if 0
@@ -315,6 +328,6 @@ int sprintf(char *out, const char *format, ...)
     va_list args;
 
     va_start( args, format );
-    return print( &out, format, args );
+    return print( &out, format, &args );
 }
 #endif

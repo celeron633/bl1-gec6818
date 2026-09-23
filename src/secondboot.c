@@ -19,6 +19,7 @@
 
 #define __SET_GLOBAL_VARIABLES
 #include "sysheader.h"
+#include "nx_bootheader.h"
 
 //#define SIMPLE_MEMTEST 			(1)
 
@@ -66,7 +67,17 @@ extern void SwitchToEL2(void);
 extern void psciInit(U32 bootCpu);
 #endif
 #if defined(BOOT_LOGO)
-extern void DisplayBanner(const char *text);
+extern void DisplayInit(const char *title);
+extern void DisplayPrint(const char *fmt, ...);
+#else
+#define DisplayPrint(...) do { } while (0)
+#endif
+
+/* what pTBI is: u-boot directly, or ATF's BL2 in front of it */
+#if defined(SKIP_ATF)
+#define NEXT_STAGE_NAME "u-boot"
+#else
+#define NEXT_STAGE_NAME "fip-loader"
 #endif
 extern U32 GetCurrentSMode(void);
 
@@ -357,8 +368,10 @@ void BootMain(U32 CPUID)
 
 #if defined(BOOT_LOGO)
 	/* needs DDR for the framebuffer; on resume the kernel owns the LCD */
-	if (!isResume)
-		DisplayBanner(BOOT_LOGO_TEXT);
+	if (!isResume) {
+		DisplayInit(BOOT_LOGO_TEXT);
+		DisplayPrint("DDR3 init done");
+	}
 #endif
 
 #if (CCI400_COHERENCY_ENABLE == 1)
@@ -397,6 +410,16 @@ void BootMain(U32 CPUID)
 
 	printf("LoadDevice=%d (0:USB 1:SPI 2:NAND 3:SDMMC 4:SDFS 5:UART)\r\n",
 	       pSBI->DBI.SPIBI.LoadDevice);
+#if defined(BOOT_LOGO)
+	{
+		static const char *const devices[] = {
+			"USB", "SPI", "NAND", "SD/MMC", "SD FAT", "UART" };
+		U32 dev = pSBI->DBI.SPIBI.LoadDevice;
+
+		DisplayPrint("Loading " NEXT_STAGE_NAME " from %s...",
+			     dev < 6 ? devices[dev] : "?");
+	}
+#endif
 
 	switch (pSBI->DBI.SPIBI.LoadDevice) {
 #if defined(SUPPORT_USB_BOOT)
@@ -457,6 +480,21 @@ void BootMain(U32 CPUID)
 		void (*pLaunch)(U32, U32) =
 		    (void (*)(U32, U32))((MPTRS)pTBI->LAUNCHADDR);
 		SYSMSG(" Image Loading Done!\r\n");
+#if defined(BOOT_LOGO)
+		{
+			/* SD reads the 3rd-stage header layout (nx_bootheader.h),
+			 * USB boot the old NX_SecondBootInfo one */
+			const struct nx_tbbinfo *tbbi =
+				&((struct nx_bootheader *)pTBI)->tbbi;
+			int sd = pSBI->DBI.SPIBI.LoadDevice == BOOT_FROM_SDMMC;
+
+			DisplayPrint("Loaded %d KB to 0x%08X",
+				     (sd ? tbbi->loadsize : pTBI->LOADSIZE) >> 10,
+				     sd ? (U32)tbbi->loadaddr : pTBI->LOADADDR);
+		}
+#endif
+		DisplayPrint("Jumping to " NEXT_STAGE_NAME " at 0x%08X",
+			     (U32)(MPTRS)pLaunch);
 		SYSMSG("Launch to 0x%08X, currently EL%d\r\n",
 		       (MPTRS)pLaunch, GetCurrentSMode());
 #if defined(SKIP_ATF) && defined(aarch64)
@@ -483,6 +521,7 @@ void BootMain(U32 CPUID)
 	}
 
 	printf(" Image Loading Failure Try to USB boot\r\n");
+	DisplayPrint("Loading " NEXT_STAGE_NAME " FAILED, trying USB boot");
 	temp = 0x10000000;
 	while (!DebugIsUartTxDone() && temp--);
 	RomUSBBoot((U32)0x0000009C);

@@ -1,5 +1,7 @@
 /*
- * Boot banner on the GEC6818's RGB LCD (AT070TN92, 800x480).
+ * Boot progress text on the GEC6818's RGB LCD (AT070TN92, 800x480):
+ * DisplayInit() puts up a centered title, DisplayPrint() adds a line below
+ * it and waits BOOT_LOGO_DELAY_MS so each step can be read.
  *
  * A trimmed copy of what u-boot does in nx_rgb_display()
  * (drivers/video/nexell/s5pxx18_dp.c, s5pxx18_dp_rgb.c) with the values
@@ -8,10 +10,11 @@
  * dither. Register accesses follow u-boot's read-modify-write order so
  * the result matches it bit for bit.
  *
- * To keep DDR traffic tiny (BL1 runs with the D-cache off) the RGB layer
- * only covers the text; the rest of the screen is the MLC background
- * color, which costs no memory at all. u-boot resets the display blocks
- * and sets them up again for its own logo later.
+ * To keep DDR traffic small (BL1 runs with the D-cache off) the RGB layer
+ * only covers the lines printed so far and grows by one line per
+ * DisplayPrint(); the rest of the screen is the MLC background color,
+ * which costs no memory at all. u-boot resets the display blocks and sets
+ * them up again for its own logo later.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -19,6 +22,7 @@
  * of the License, or (at your option) any later version.
  */
 
+#include <stdarg.h>
 #include "sysheader.h"
 #include "font8x16.h"
 
@@ -46,6 +50,22 @@ extern void ResetCon(U32 devicenum, CBOOL en);
 #define TEXT_SCALE	2
 #define GLYPH_W		(FONT_WIDTH * TEXT_SCALE)
 #define GLYPH_H		(FONT_HEIGHT * TEXT_SCALE)
+#define TEXT_COLS	(LCD_WIDTH / GLYPH_W)	/* 50 */
+#define TEXT_ROWS	12
+#define TEXT_TOP	((LCD_HEIGHT - TEXT_ROWS * GLYPH_H) / 2)
+
+/*
+ * TIMER ch0 as a 1MHz down-counter for the delays, set up like u-boot's
+ * timer_init(): PCLK (200MHz, clockinit.c: PLL3 / 2 / 2) / prescaler 200.
+ */
+#define TIMER		0xC0017000
+#define TIMER_TCFG0	(TIMER + 0x00)
+#define TIMER_TCFG1	(TIMER + 0x04)
+#define TIMER_TCON	(TIMER + 0x08)
+#define TIMER_TCNTB0	(TIMER + 0x0C)
+#define TIMER_TCMPB0	(TIMER + 0x10)
+#define TIMER_TCNTO0	(TIMER + 0x14)
+#define TIMER_PCLK_HZ	200000000
 
 #define DISPTOP_TFTMPU_MUX	0xC0101024
 #define MLC0			0xC0102000
@@ -135,12 +155,17 @@ static void lcd_gpio_init(void)
 #endif
 }
 
-static void draw_text(U32 *fb, U32 stride, const char *s)
+/* one full-width text row, padded with spaces, centered or indented by one */
+static void draw_row(U32 row, const char *s, int center)
 {
-	int x, y;
+	U32 *fb = (U32 *)(MPTRS)FB_BASE + row * GLYPH_H * LCD_WIDTH;
+	U32 len = 0, pad, col, x, y;
 
-	for (; *s; s++, fb += GLYPH_W) {
-		unsigned char c = *s;
+	while (s[len] && len < TEXT_COLS - 2)
+		len++;
+	pad = center ? (TEXT_COLS - len) / 2 : 1;
+	for (col = 0; col < TEXT_COLS; col++, fb += GLYPH_W) {
+		unsigned char c = (col >= pad && col - pad < len) ? s[col - pad] : ' ';
 		const unsigned char *glyph;
 
 		if (c < FONT_FIRST || c > FONT_LAST)
@@ -148,7 +173,7 @@ static void draw_text(U32 *fb, U32 stride, const char *s)
 		glyph = font8x16[c - FONT_FIRST];
 		for (y = 0; y < GLYPH_H; y++) {
 			U32 bits = glyph[y / TEXT_SCALE];
-			U32 *p = fb + y * stride;
+			U32 *p = fb + y * LCD_WIDTH;
 
 			for (x = 0; x < GLYPH_W; x++)
 				p[x] = (bits & (0x80 >> (x / TEXT_SCALE))) ?
@@ -157,20 +182,41 @@ static void draw_text(U32 *fb, U32 stride, const char *s)
 	}
 }
 
-void DisplayBanner(const char *text)
+/* make the RGB layer cover rows 0..rows-1, from the next frame on */
+static void show_rows(U32 rows)
 {
-	U32 len = 0, w, h = GLYPH_H, sx, sy;
+	WriteIO32(MLCRGB1(RGB_TOPBOTTOM),
+		  (TEXT_TOP << 16) | (TEXT_TOP + rows * GLYPH_H - 1));
+	rmw(MLCRGB1(RGB_CONTROL), 0, MLC_RGB_DIRTY);
+}
+
+static void timer_init(void)
+{
+	rmw(TIMER_TCFG0, 0xFF, TIMER_PCLK_HZ / 1000000 - 1);
+	rmw(TIMER_TCFG1, 0xF, 0);
+	WriteIO32(TIMER_TCNTB0, 0xFFFFFFFF);
+	WriteIO32(TIMER_TCMPB0, 0xFFFFFFFF);
+	rmw(TIMER_TCON, 0xF, 1 << 1);		/* manual update */
+	rmw(TIMER_TCON, 0xF, (1 << 3) | 1);	/* auto reload, start */
+}
+
+static void delay_ms(U32 ms)
+{
+	U32 start = ReadIO32(TIMER_TCNTO0);
+
+	while (start - ReadIO32(TIMER_TCNTO0) < ms * 1000)
+		;
+}
+
+/* next free text row; -1 until DisplayInit(), so DisplayPrint() is a no-op */
+static int next_row = -1;
+
+void DisplayInit(const char *title)
+{
 	int i;
 
-	while (text[len])
-		len++;
-	w = len * GLYPH_W;
-	if (w == 0 || w > LCD_WIDTH)
-		return;
-	sx = (LCD_WIDTH - w) / 2;
-	sy = (LCD_HEIGHT - h) / 2;
-
-	draw_text((U32 *)(MPTRS)FB_BASE, w, text);
+	draw_row(0, title, 1);
+	draw_row(1, "", 0);
 	lcd_gpio_init();
 
 	/* dp_control_init() */
@@ -199,10 +245,11 @@ void DisplayBanner(const char *text)
 	rmw(MLCRGB1(RGB_INVCOLOR), 0x00FFFFFF, 0);
 	for (i = 0; i < 4; i++)
 		WriteIO32((MPTRS)MLCRGB1(RGB_INVALID0_LR) + i * 4, 0);
-	WriteIO32(MLCRGB1(RGB_LEFTRIGHT), (sx << 16) | (sx + w - 1));
-	WriteIO32(MLCRGB1(RGB_TOPBOTTOM), (sy << 16) | (sy + h - 1));
+	WriteIO32(MLCRGB1(RGB_LEFTRIGHT), LCD_WIDTH - 1);
+	WriteIO32(MLCRGB1(RGB_TOPBOTTOM),
+		  (TEXT_TOP << 16) | (TEXT_TOP + 2 * GLYPH_H - 1));
 	WriteIO32(MLCRGB1(RGB_HSTRIDE), 4);
-	WriteIO32(MLCRGB1(RGB_VSTRIDE), w * 4);
+	WriteIO32(MLCRGB1(RGB_VSTRIDE), LCD_WIDTH * 4);
 	WriteIO32(MLCRGB1(RGB_ADDRESS), FB_BASE);
 
 	/* dp_plane_set_enable() */
@@ -265,6 +312,29 @@ void DisplayBanner(const char *text)
 	rmw(DPCCTRL0, DPC_INTPEND | (1 << 15), 1 << 15);
 	rmw(DPCCLKENB, 1 << 2, 1 << 2);
 
-	SYSMSG("LCD: %dx%d, \"%s\" at %d,%d, fb 0x%08X\r\n",
-	       LCD_WIDTH, LCD_HEIGHT, text, sx, sy, FB_BASE);
+	SYSMSG("LCD: %dx%d, fb 0x%08X, %d ms per line\r\n",
+	       LCD_WIDTH, LCD_HEIGHT, FB_BASE, BOOT_LOGO_DELAY_MS);
+
+	timer_init();
+	next_row = 2;
+	delay_ms(BOOT_LOGO_DELAY_MS);
+}
+
+/* printf() a line below the title (once the screen is full, the last row) */
+void DisplayPrint(const char *fmt, ...)
+{
+	char buf[TEXT_COLS * 2];
+	va_list args;
+
+	if (next_row < 0)
+		return;
+	va_start(args, fmt);
+	sprint_va(buf, fmt, &args);
+	va_end(args);
+
+	if (next_row == TEXT_ROWS)
+		next_row--;
+	draw_row(next_row++, buf, 0);
+	show_rows(next_row);
+	delay_ms(BOOT_LOGO_DELAY_MS);
 }
