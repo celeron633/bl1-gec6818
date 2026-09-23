@@ -75,13 +75,14 @@ UBOOT_ARCH			?= aarch64
 # BL1's header from, and patches its PortNumber byte to match.
 BOOT_PORT			?= sd
 # BOOT_LOGO=y: after DDR init, light up the RGB LCD (AT070TN92), show
-# BOOT_LOGO_TEXT as a title and then one line per boot step (loading and
-# jumping to the next stage), pausing BOOT_LOGO_DELAY_MS after each
+# BOOT_LOGO_TEXT as a title, then one line per boot step (clocks, DDR,
+# TrustZone, CPUs, loading and jumping to the next stage) and a progress
+# bar at the bottom, pausing BOOT_LOGO_DELAY_MS after each step
 # (src/display.c). LCD_BACKLIGHT=high|low also drives the backlight pad
 # (GPIOD1/PWM0) to that level; the default leaves it alone, since which
 # level means "on" is not known yet.
 BOOT_LOGO			?= y
-BOOT_LOGO_TEXT			?= S5P6818 BootROM Loading...
+BOOT_LOGO_TEXT			?= S5P6818 BL1 Loading...
 BOOT_LOGO_DELAY_MS		?= 500
 LCD_BACKLIGHT			?= none
 

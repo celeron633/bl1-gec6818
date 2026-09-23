@@ -68,9 +68,21 @@ extern void psciInit(U32 bootCpu);
 #endif
 #if defined(BOOT_LOGO)
 extern void DisplayInit(const char *title);
-extern void DisplayPrint(const char *fmt, ...);
+extern void DisplayStep(U32 percent, const char *fmt, ...);
+extern U32 getquotient(U32 dividend, U32 divisor);
+extern U32 NX_CLKPWR_GetPLLFreq(U32 PllNumber);
+extern U32 NX_CLKPWR_GetSrcPll(U32 Divider);
+extern U32 NX_CLKPWR_GetDivideValue(U32 Divider);
+
+/* first-stage output of clock divider dvo (0: CPU, 1: BCLK, 2: MDCLK) */
+static U32 dvo_mhz(U32 dvo)
+{
+	return getquotient(getquotient(
+		NX_CLKPWR_GetPLLFreq(NX_CLKPWR_GetSrcPll(dvo)),
+		NX_CLKPWR_GetDivideValue(dvo) & 0xFF), 1000000);
+}
 #else
-#define DisplayPrint(...) do { } while (0)
+#define DisplayStep(...) do { } while (0)
 #endif
 
 /* what pTBI is: u-boot directly, or ATF's BL2 in front of it */
@@ -78,6 +90,17 @@ extern void DisplayPrint(const char *fmt, ...);
 #define NEXT_STAGE_NAME "u-boot"
 #else
 #define NEXT_STAGE_NAME "fip-loader"
+#endif
+
+/* the whole chain this BL1 was built for, for the LCD */
+#if !defined(SKIP_ATF)
+#define BOOT_CHAIN "BL1 -> ATF BL2/BL31 -> u-boot"
+#elif defined(aarch64)
+#define BOOT_CHAIN "BL1 AArch64 EL3 -> u-boot EL2"
+#elif defined(UBOOT_AARCH32)
+#define BOOT_CHAIN "BL1 AArch32 -> u-boot AArch32"
+#else
+#define BOOT_CHAIN "BL1 AArch32 -> stage2 EL3 -> u-boot EL2"
 #endif
 extern U32 GetCurrentSMode(void);
 
@@ -370,7 +393,11 @@ void BootMain(U32 CPUID)
 	/* needs DDR for the framebuffer; on resume the kernel owns the LCD */
 	if (!isResume) {
 		DisplayInit(BOOT_LOGO_TEXT);
-		DisplayPrint("DDR3 init done");
+		DisplayStep(5, "Built " __DATE__ " " __TIME__);
+		DisplayStep(10, "Chain: " BOOT_CHAIN);
+		DisplayStep(15, "Clocks: CPU %d MHz, DDR %d MHz, BUS %d MHz",
+			    dvo_mhz(0), dvo_mhz(2), dvo_mhz(1));
+		DisplayStep(25, "DDR3 init done");
 	}
 #endif
 
@@ -382,6 +409,7 @@ void BootMain(U32 CPUID)
 	SYSMSG("SetSecureState (TZPC/TZASC/GIC)...\r\n");
 	SetSecureState();
 	SYSMSG("SetSecureState done\r\n");
+	DisplayStep(35, "TrustZone set up (TZPC/TZASC/GIC)");
 
 	SYSMSG("Wakeup CPU ");
 
@@ -390,6 +418,7 @@ void BootMain(U32 CPUID)
 	psciInit(CPUID);
 #endif
 	SubCPUBringUp(CPUID);
+	DisplayStep(45, "Secondary CPUs started");
 #else
 	SYSMSG("(MULTICORE_BRING_UP=0, secondary cores left as-is)\r\n");
 #endif
@@ -416,8 +445,14 @@ void BootMain(U32 CPUID)
 			"USB", "SPI", "NAND", "SD/MMC", "SD FAT", "UART" };
 		U32 dev = pSBI->DBI.SPIBI.LoadDevice;
 
-		DisplayPrint("Loading " NEXT_STAGE_NAME " from %s...",
-			     dev < 6 ? devices[dev] : "?");
+		if (dev == BOOT_FROM_SDMMC)
+			DisplayStep(55, "Loading " NEXT_STAGE_NAME
+				    " from SD/MMC%d, offset 0x%X",
+				    pSBI->DBI.SDMMCBI.PortNumber,
+				    pSBI->DEVICEADDR);
+		else
+			DisplayStep(55, "Loading " NEXT_STAGE_NAME " from %s...",
+				    dev < 6 ? devices[dev] : "?");
 	}
 #endif
 
@@ -488,13 +523,13 @@ void BootMain(U32 CPUID)
 				&((struct nx_bootheader *)pTBI)->tbbi;
 			int sd = pSBI->DBI.SPIBI.LoadDevice == BOOT_FROM_SDMMC;
 
-			DisplayPrint("Loaded %d KB to 0x%08X",
-				     (sd ? tbbi->loadsize : pTBI->LOADSIZE) >> 10,
-				     sd ? (U32)tbbi->loadaddr : pTBI->LOADADDR);
+			DisplayStep(85, "Loaded %d KB to 0x%08X",
+				    (sd ? tbbi->loadsize : pTBI->LOADSIZE) >> 10,
+				    sd ? (U32)tbbi->loadaddr : pTBI->LOADADDR);
 		}
 #endif
-		DisplayPrint("Jumping to " NEXT_STAGE_NAME " at 0x%08X",
-			     (U32)(MPTRS)pLaunch);
+		DisplayStep(100, "Jumping to " NEXT_STAGE_NAME " at 0x%08X",
+			    (U32)(MPTRS)pLaunch);
 		SYSMSG("Launch to 0x%08X, currently EL%d\r\n",
 		       (MPTRS)pLaunch, GetCurrentSMode());
 #if defined(SKIP_ATF) && defined(aarch64)
@@ -532,7 +567,7 @@ void BootMain(U32 CPUID)
 	}
 
 	printf(" Image Loading Failure Try to USB boot\r\n");
-	DisplayPrint("Loading " NEXT_STAGE_NAME " FAILED, trying USB boot");
+	DisplayStep(0, "Loading " NEXT_STAGE_NAME " FAILED, trying USB boot");
 	temp = 0x10000000;
 	while (!DebugIsUartTxDone() && temp--);
 	RomUSBBoot((U32)0x0000009C);

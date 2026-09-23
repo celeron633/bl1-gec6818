@@ -24,7 +24,8 @@ What is emulated:
   - LCD, as pictures only: with --screenshot, every time MLC0 or one of
     its RGB layers is updated (dirty flag written) its background and
     XRGB8888 RGB layers are rendered from DDR to PREFIX-N.png if the
-    picture changed, and once more at the end.
+    picture changed, when the next stage is entered, and once more at the
+    end.
   - PLL/DDR/CCI/GMAC status polls report "done" (GMAC: no PHY). Everything
     else is plain read-back-what-was-written storage, so DDR training
     reports failure and BL1 carries on anyway.
@@ -804,8 +805,12 @@ def install_hooks(board, uc, info):
 
     if "next" in info:
         saddr = info["next"][2]
-        watch[saddr] = lambda: milestone(
-            f"entered NSIH2 StartAddr 0x{saddr:x} (u-boot)")
+
+        def entered_next():
+            milestone(f"entered NSIH2 StartAddr 0x{saddr:x} (u-boot)")
+            if board.args.screenshot and board.screens:
+                board.screenshot()      # BL1's last picture
+        watch[saddr] = entered_next
     if board.uboot_syms and "relocate_code" in board.uboot_syms:
         # u-boot copies itself to the top of DDR: once relocate_code(x0/r0 =
         # new address) runs, add its symbols again at the relocated address.

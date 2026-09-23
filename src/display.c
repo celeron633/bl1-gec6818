@@ -1,7 +1,9 @@
 /*
- * Boot progress text on the GEC6818's RGB LCD (AT070TN92, 800x480):
- * DisplayInit() puts up a centered title, DisplayPrint() adds a line below
- * it and waits BOOT_LOGO_DELAY_MS so each step can be read.
+ * Boot progress on the GEC6818's RGB LCD (AT070TN92, 800x480):
+ * DisplayInit() puts up a centered title and an empty progress bar at the
+ * bottom; DisplayStep() adds a line below the title and moves the bar to
+ * the given percentage, animated over the BOOT_LOGO_DELAY_MS it then waits
+ * so each step can be read.
  *
  * A trimmed copy of what u-boot does in nx_rgb_display()
  * (drivers/video/nexell/s5pxx18_dp.c, s5pxx18_dp_rgb.c) with the values
@@ -10,11 +12,12 @@
  * dither. Register accesses follow u-boot's read-modify-write order so
  * the result matches it bit for bit.
  *
- * To keep DDR traffic small (BL1 runs with the D-cache off) the RGB layer
+ * To keep DDR traffic small (BL1 runs with the D-cache off) RGB layer 1
  * only covers the lines printed so far and grows by one line per
- * DisplayPrint(); the rest of the screen is the MLC background color,
- * which costs no memory at all. u-boot resets the display blocks and sets
- * them up again for its own logo later.
+ * DisplayStep(), and RGB layer 0 only covers the progress bar; the rest of
+ * the screen is the MLC background color, which costs no memory at all.
+ * u-boot resets the display blocks and sets them up again for its own
+ * logo later.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -43,8 +46,9 @@ extern void ResetCon(U32 devicenum, CBOOL en);
 #define LCD_CLK_DIV	(LCD_PLL_HZ / ((LCD_HSW + LCD_HBP + LCD_HFP + LCD_WIDTH) * \
 			(LCD_VSW + LCD_VBP + LCD_VFP + LCD_HEIGHT) * LCD_FREQ))
 
-/* framebuffer: u-boot's CONFIG_FB_ADDR, 4 bytes per pixel */
+/* framebuffers, 4 bytes per pixel: text at u-boot's CONFIG_FB_ADDR, bar after */
 #define FB_BASE		0x46000000
+#define FB_BAR		(FB_BASE + LCD_WIDTH * LCD_HEIGHT * 4)
 #define BG_COLOR	0x000000
 #define FG_COLOR	0xFFFFFF
 #define TEXT_SCALE	2
@@ -52,7 +56,17 @@ extern void ResetCon(U32 devicenum, CBOOL en);
 #define GLYPH_H		(FONT_HEIGHT * TEXT_SCALE)
 #define TEXT_COLS	(LCD_WIDTH / GLYPH_W)	/* 50 */
 #define TEXT_ROWS	12
-#define TEXT_TOP	((LCD_HEIGHT - TEXT_ROWS * GLYPH_H) / 2)
+#define TEXT_TOP	16
+
+/* progress bar: white outline, a black gap, then the fill */
+#define BAR_COLOR	0x3399FF
+#define BAR_X		40
+#define BAR_Y		(TEXT_TOP + TEXT_ROWS * GLYPH_H + 24)
+#define BAR_W		(LCD_WIDTH - 2 * BAR_X)
+#define BAR_H		24
+#define BAR_BORDER	2
+#define BAR_INSET	(2 * BAR_BORDER)
+#define BAR_FILL_W	(BAR_W - 2 * BAR_INSET)
 
 /*
  * TIMER ch0 as a 1MHz down-counter for the delays, set up like u-boot's
@@ -75,7 +89,7 @@ extern void ResetCon(U32 devicenum, CBOOL en);
 #define MLCCONTROLT	(MLC0 + 0x000)
 #define MLCSCREENSIZE	(MLC0 + 0x004)
 #define MLCBGCOLOR	(MLC0 + 0x008)
-#define MLCRGB1(off)	(MLC0 + 0x040 + (off))	/* RGB layer 1 */
+#define MLCRGB(l, off)	((MPTRS)MLC0 + 0x00C + (l) * 0x34 + (off))  /* RGB layer l */
 #define RGB_LEFTRIGHT	0x00
 #define RGB_TOPBOTTOM	0x04
 #define RGB_INVALID0_LR	0x08	/* .. four words up to 0x14 */
@@ -120,6 +134,8 @@ extern void ResetCon(U32 devicenum, CBOOL en);
 #define GPIO_PULLSEL_DD	0x5C
 #define GPIO_PULLENB	0x60
 #define GPIO_PULLENB_DD	0x64
+
+extern U32 getquotient(U32 dividend, U32 divisor);
 
 static void rmw(MPTRS addr, U32 clear, U32 set)
 {
@@ -182,12 +198,63 @@ static void draw_row(U32 row, const char *s, int center)
 	}
 }
 
-/* make the RGB layer cover rows 0..rows-1, from the next frame on */
+/* make the text layer cover rows 0..rows-1, from the next frame on */
 static void show_rows(U32 rows)
 {
-	WriteIO32(MLCRGB1(RGB_TOPBOTTOM),
+	WriteIO32(MLCRGB(1, RGB_TOPBOTTOM),
 		  (TEXT_TOP << 16) | (TEXT_TOP + rows * GLYPH_H - 1));
-	rmw(MLCRGB1(RGB_CONTROL), 0, MLC_RGB_DIRTY);
+	rmw(MLCRGB(1, RGB_CONTROL), 0, MLC_RGB_DIRTY);
+}
+
+/* rectangle in the bar's framebuffer */
+static void bar_rect(U32 x0, U32 y0, U32 x1, U32 y1, U32 color)
+{
+	U32 *fb = (U32 *)(MPTRS)FB_BAR, x, y;
+
+	for (y = y0; y < y1; y++)
+		for (x = x0; x < x1; x++)
+			fb[y * BAR_W + x] = color;
+}
+
+static void bar_init(void)
+{
+	bar_rect(0, 0, BAR_W, BAR_H, FG_COLOR);
+	bar_rect(BAR_BORDER, BAR_BORDER, BAR_W - BAR_BORDER, BAR_H - BAR_BORDER,
+		 BG_COLOR);
+}
+
+/* the bar's fill is bar_shown pixels wide and heading for bar_target */
+static U32 bar_shown, bar_target;
+
+static void bar_grow(U32 to)
+{
+	if (to <= bar_shown)
+		return;
+	bar_rect(BAR_INSET + bar_shown, BAR_INSET, BAR_INSET + to,
+		 BAR_H - BAR_INSET, BAR_COLOR);
+	bar_shown = to;
+}
+
+/* dp_plane_layer_setup() + dp_plane_set_enable() for RGB layer l */
+static void layer_setup(U32 l, U32 x, U32 y, U32 w, U32 h, U32 fb)
+{
+	int i;
+
+	/* lock size 16, no blend/tp/inversion */
+	rmw(MLCRGB(l, RGB_CONTROL), 0xFFFF0000 | (3 << 12) | MLC_RGB_DIRTY | 7,
+	    MLC_FMT_XRGB8888 | (2 << 12));
+	rmw(MLCRGB(l, RGB_TPCOLOR), 0xF0FFFFFF, 15u << 28);
+	rmw(MLCRGB(l, RGB_INVCOLOR), 0x00FFFFFF, 0);
+	for (i = 0; i < 4; i++)
+		WriteIO32(MLCRGB(l, RGB_INVALID0_LR) + i * 4, 0);
+	WriteIO32(MLCRGB(l, RGB_LEFTRIGHT), (x << 16) | (x + w - 1));
+	WriteIO32(MLCRGB(l, RGB_TOPBOTTOM), (y << 16) | (y + h - 1));
+	WriteIO32(MLCRGB(l, RGB_HSTRIDE), 4);
+	WriteIO32(MLCRGB(l, RGB_VSTRIDE), w * 4);
+	WriteIO32(MLCRGB(l, RGB_ADDRESS), fb);
+
+	rmw(MLCRGB(l, RGB_CONTROL), MLC_RGB_DIRTY, 1 << 5);
+	rmw(MLCRGB(l, RGB_CONTROL), 0, MLC_RGB_DIRTY);
 }
 
 static void timer_init(void)
@@ -200,15 +267,21 @@ static void timer_init(void)
 	rmw(TIMER_TCON, 0xF, (1 << 3) | 1);	/* auto reload, start */
 }
 
+/* wait ms milliseconds, moving the bar's fill to bar_target meanwhile */
 static void delay_ms(U32 ms)
 {
-	U32 start = ReadIO32(TIMER_TCNTO0);
+	U32 start = ReadIO32(TIMER_TCNTO0), from = bar_shown, t;
 
-	while (start - ReadIO32(TIMER_TCNTO0) < ms * 1000)
-		;
+	do {
+		t = getquotient(start - ReadIO32(TIMER_TCNTO0), 1000);
+		if (t > ms)
+			t = ms;
+		bar_grow(t == ms ? bar_target :
+			 from + getquotient((bar_target - from) * t, ms));
+	} while (t < ms);
 }
 
-/* next free text row; -1 until DisplayInit(), so DisplayPrint() is a no-op */
+/* next free text row; -1 until DisplayInit(), so DisplayStep() is a no-op */
 static int next_row = -1;
 
 void DisplayInit(const char *title)
@@ -217,6 +290,8 @@ void DisplayInit(const char *title)
 
 	draw_row(0, title, 1);
 	draw_row(1, "", 0);
+	bar_shown = bar_target = 0;	/* .bss isn't cleared on every boot path */
+	bar_init();
 	lcd_gpio_init();
 
 	/* dp_control_init() */
@@ -238,23 +313,9 @@ void DisplayInit(const char *title)
 	/* pixel buffer powered, not sleeping */
 	rmw(MLCCONTROLT, MLC_TOP_DIRTY, (1 << 11) | (1 << 10));
 
-	/* dp_plane_layer_setup(): lock size 16, no blend/tp/inversion */
-	rmw(MLCRGB1(RGB_CONTROL), 0xFFFF0000 | (3 << 12) | MLC_RGB_DIRTY | 7,
-	    MLC_FMT_XRGB8888 | (2 << 12));
-	rmw(MLCRGB1(RGB_TPCOLOR), 0xF0FFFFFF, 15u << 28);
-	rmw(MLCRGB1(RGB_INVCOLOR), 0x00FFFFFF, 0);
-	for (i = 0; i < 4; i++)
-		WriteIO32((MPTRS)MLCRGB1(RGB_INVALID0_LR) + i * 4, 0);
-	WriteIO32(MLCRGB1(RGB_LEFTRIGHT), LCD_WIDTH - 1);
-	WriteIO32(MLCRGB1(RGB_TOPBOTTOM),
-		  (TEXT_TOP << 16) | (TEXT_TOP + 2 * GLYPH_H - 1));
-	WriteIO32(MLCRGB1(RGB_HSTRIDE), 4);
-	WriteIO32(MLCRGB1(RGB_VSTRIDE), LCD_WIDTH * 4);
-	WriteIO32(MLCRGB1(RGB_ADDRESS), FB_BASE);
-
-	/* dp_plane_set_enable() */
-	rmw(MLCRGB1(RGB_CONTROL), MLC_RGB_DIRTY, 1 << 5);
-	rmw(MLCRGB1(RGB_CONTROL), 0, MLC_RGB_DIRTY);
+	/* text in RGB layer 1 (title + blank row for now), bar in layer 0 */
+	layer_setup(1, 0, TEXT_TOP, LCD_WIDTH, 2 * GLYPH_H, FB_BASE);
+	layer_setup(0, BAR_X, BAR_Y, BAR_W, BAR_H, FB_BAR);
 
 	/* dp_plane_screen_enable() */
 	rmw(MLCCONTROLT, MLC_TOP_DIRTY, 1 << 1);
@@ -320,14 +381,21 @@ void DisplayInit(const char *title)
 	delay_ms(BOOT_LOGO_DELAY_MS);
 }
 
-/* printf() a line below the title (once the screen is full, the last row) */
-void DisplayPrint(const char *fmt, ...)
+/*
+ * printf() a line below the title (once the screen is full, into the last
+ * row) and move the progress bar up to percent, never back.
+ */
+void DisplayStep(U32 percent, const char *fmt, ...)
 {
 	char buf[TEXT_COLS * 2];
 	va_list args;
+	U32 target;
 
 	if (next_row < 0)
 		return;
+	target = getquotient((percent > 100 ? 100 : percent) * BAR_FILL_W, 100);
+	if (target > bar_target)
+		bar_target = target;
 	va_start(args, fmt);
 	sprint_va(buf, fmt, &args);
 	va_end(args);

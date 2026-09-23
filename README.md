@@ -73,9 +73,11 @@ configurations need u-boot's `u-boot-direct.img` (`make u-boot-direct.img`
 in u-boot_gec6818), not `fip-nonsecure.img`.
 
 Right after DDR init, BL1 turns on the RGB LCD (AT070TN92, 800x480),
-shows `BOOT_LOGO_TEXT` as a title and then one line per boot step (DDR
-done, loading u-boot, loaded size/address, jumping to it), pausing
-`BOOT_LOGO_DELAY_MS` (default 500) after each so they can be read. It stays
+shows `BOOT_LOGO_TEXT` as a title, then one line per boot step (build
+date, boot chain, clocks, DDR, TrustZone, secondary CPUs, loading u-boot,
+loaded size/address, jumping to it) and a progress bar at the bottom,
+pausing `BOOT_LOGO_DELAY_MS` (default 500) after each step while the bar
+moves on. It stays
 until u-boot sets up the display for its own logo (`src/display.c`).
 `make BOOT_LOGO=n` leaves it out, `make BOOT_LOGO_TEXT='...'` changes the
 title, `make BOOT_LOGO_DELAY_MS=0` removes the pauses. The backlight pad (GPIOD1/PWM0) is left alone unless you pass
@@ -270,8 +272,9 @@ make clean && make OPMODE=aarch32 UBOOT_ARCH=aarch32 CROSS_TOOL=arm-linux-gnueab
 `u-boot-direct.img`（在 u-boot_gec6818 里 `make u-boot-direct.img`），不是 `fip-nonsecure.img`。
 
 DDR 初始化完成后，BL1 会点亮 RGB 屏（AT070TN92，800x480），先显示标题
-`BOOT_LOGO_TEXT`，再每个启动步骤一行（DDR 完成、开始读 u-boot、读到的大小和地址、
-跳转），每行之后停 `BOOT_LOGO_DELAY_MS`（默认 500）毫秒方便看清，一直保留到 u-boot
+`BOOT_LOGO_TEXT`，再每个启动步骤一行（编译时间、启动链路、时钟、DDR、TrustZone、副核、
+开始读 u-boot、读到的大小和地址、跳转），最下面是进度条；每步之后停
+`BOOT_LOGO_DELAY_MS`（默认 500）毫秒方便看清，进度条在停顿期间往前走。一直保留到 u-boot
 重新初始化显示、画它自己的 logo（`src/display.c`）。`make BOOT_LOGO=n` 去掉这个功能，
 `make BOOT_LOGO_TEXT='...'` 改标题，`make BOOT_LOGO_DELAY_MS=0` 去掉停顿。背光脚（GPIOD1/PWM0）默认不动，要驱动它就加 `LCD_BACKLIGHT=high` 或
 `LCD_BACKLIGHT=low`——哪个电平是亮，还没在板子上确认过。
