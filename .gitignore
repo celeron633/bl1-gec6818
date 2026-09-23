@@ -2,5 +2,6 @@
 *.o
 *.d
 *.bin
+!prebuilt/*.bin
 *.elf
 *.map

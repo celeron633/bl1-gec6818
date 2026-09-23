@@ -57,6 +57,11 @@ SYSLOG				?= y
 # Secure Boot
 SECURE_ON			?= 0
 
+# Which device BL1 (and u-boot after it) boots from: sd or emmc. Picks
+# the reference-nsih/raptor-*-64.txt header tools/mk_bl1_image.py builds
+# BL1's header from, and patches its PortNumber byte to match.
+BOOT_PORT			?= sd
+
 # cross-tool pre-header
 ifeq ($(OPMODE), aarch32)
 ifeq ($(OS),Windows_NT)

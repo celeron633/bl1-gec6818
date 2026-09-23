@@ -103,7 +103,9 @@ link:
 
 bin:
 	@echo [binary.... $(DIR_TARGETOUTPUT)/$(TARGET_NAME).bin]
-	$(Q)$(MAKEBIN) -O binary $(DIR_TARGETOUTPUT)/$(TARGET_NAME).elf $(DIR_TARGETOUTPUT)/$(TARGET_NAME).bin
+	$(Q)$(MAKEBIN) -O binary $(DIR_TARGETOUTPUT)/$(TARGET_NAME).elf $(DIR_TARGETOUTPUT)/$(TARGET_NAME)-raw.bin
+	@echo [header.... $(DIR_TARGETOUTPUT)/$(TARGET_NAME).bin, BOOT_PORT=$(BOOT_PORT)]
+	$(Q)python3 tools/mk_bl1_image.py $(DIR_TARGETOUTPUT)/$(TARGET_NAME)-raw.bin -o $(DIR_TARGETOUTPUT)/$(TARGET_NAME).bin --port $(BOOT_PORT)
 ifeq ($(OS),Windows_NT)
 	@if exist $(DIR_OBJOUTPUT)			\
 		@$(RM) $(DIR_OBJOUTPUT)\buildinfo.o
