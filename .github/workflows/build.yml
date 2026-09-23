@@ -1,0 +1,102 @@
+name: Build BL1 + u-boot images
+
+on:
+  push:
+  workflow_dispatch:
+
+env:
+  TOOLCHAIN_URL: https://developer.arm.com/-/media/Files/downloads/gnu/13.2.rel1/binrel/arm-gnu-toolchain-13.2.rel1-x86_64-aarch64-none-elf.tar.xz
+  TOOLCHAIN_DIR: arm-gnu-toolchain-13.2.Rel1-x86_64-aarch64-none-elf
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout bl1-gec6818
+        uses: actions/checkout@v4
+        with:
+          path: bl1-gec6818
+
+      - name: Checkout u-boot_gec6818
+        uses: actions/checkout@v4
+        with:
+          repository: celeron633/u-boot_gec6818
+          path: u-boot_gec6818
+
+      - name: Install dtc
+        run: sudo apt-get update && sudo apt-get install -y device-tree-compiler
+
+      - name: Cache aarch64-none-elf toolchain
+        id: cache-toolchain
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.TOOLCHAIN_DIR }}
+          key: toolchain-${{ env.TOOLCHAIN_URL }}
+
+      - name: Download toolchain
+        if: steps.cache-toolchain.outputs.cache-hit != 'true'
+        run: curl -L -o toolchain.tar.xz "$TOOLCHAIN_URL" && tar xf toolchain.tar.xz
+
+      - name: Add toolchain to PATH
+        run: echo "$GITHUB_WORKSPACE/$TOOLCHAIN_DIR/bin" >> "$GITHUB_PATH"
+
+      - name: Build BL1 (ATF chain)
+        working-directory: bl1-gec6818
+        run: |
+          make clean
+          make
+          mkdir -p ../out/atf
+          cp out/bl1-gec6818.bin ../out/atf/bl1-gec6818.bin
+          cp prebuilt/fip-loader.img prebuilt/fip-secure.img ../out/atf/
+
+      - name: Build BL1 (SKIP_ATF, direct to u-boot)
+        working-directory: bl1-gec6818
+        run: |
+          make clean
+          make SKIP_ATF=y
+          mkdir -p ../out/direct
+          cp out/bl1-gec6818.bin ../out/direct/bl1-gec6818.bin
+
+      - name: Build u-boot (fip-nonsecure.img)
+        working-directory: u-boot_gec6818
+        env:
+          ARCH: aarch64
+          CROSS_COMPILE: aarch64-none-elf-
+        run: |
+          make distclean
+          make s5p6818_gec6818_defconfig
+          make -j"$(nproc)"
+          cp fip-nonsecure.img ../out/atf/
+
+      - name: Build u-boot (u-boot-direct.img)
+        working-directory: u-boot_gec6818
+        env:
+          ARCH: aarch64
+          CROSS_COMPILE: aarch64-none-elf-
+        run: |
+          make u-boot-direct.img
+          cp u-boot-direct.img ../out/direct/
+
+      - name: Add flashing helper + notes
+        run: |
+          cp bl1-gec6818/tools/write_sdcard.py out/
+          cat > out/README.txt <<'EOF'
+          atf/    - normal chain: BL1 -> fip-loader.img -> fip-secure.img -> fip-nonsecure.img (u-boot) -> Linux
+          direct/ - SKIP_ATF: BL1 -> u-boot-direct.img -> Linux directly, no ATF/OP-TEE
+
+          Flash with, e.g.:
+            ./write_sdcard.py --device /dev/sdX --mode atf \
+                --bl1 atf/bl1-gec6818.bin --fip-loader atf/fip-loader.img \
+                --fip-secure atf/fip-secure.img --fip-nonsecure atf/fip-nonsecure.img
+
+            ./write_sdcard.py --device /dev/sdX --mode direct \
+                --bl1 direct/bl1-gec6818.bin --uboot direct/u-boot-direct.img
+
+          See bl1-gec6818/docs/BOOT_MODES.md for details. Test on a spare SD card, not eMMC.
+          EOF
+
+      - name: Upload images
+        uses: actions/upload-artifact@v4
+        with:
+          name: gec6818-images-${{ github.sha }}
+          path: out/
