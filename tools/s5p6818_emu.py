@@ -31,7 +31,8 @@ What is emulated:
 
 Not emulated: secondary cores (BL1 reports them dead), interrupts, eMMC,
 SD writes, exceptions (a guest exception stops the run and is reported,
-so PSCI SMCs from an OS won't work).
+so PSCI SMCs from an OS won't work, and a 32-bit Linux stops at the
+deliberate NULL access in futex_init).
 
 The run ends when the guest waits for console input (e.g. at the u-boot
 prompt), after --hang-seconds without UART output or SD reads, or after
@@ -656,6 +657,31 @@ def cpu_state(board):
     return f"AArch32 {AARCH32_MODES.get(mode, hex(mode))}"
 
 
+def arm32_virt_to_phys(board, va):
+    """Physical address of `va` for the AArch32 core: identity with the
+    MMU off, else an ARMv7 short-descriptor walk from TTBR0 (TTBCR.N = 0,
+    as Linux sets it up). Unicorn's mem_read only takes physical
+    addresses."""
+    uc = board.uc
+    # cp15 bank 0: the one Unicorn's Cortex-A15 model actually runs on
+    if not uc.cpr_read(15, 0, 1, 0, 0, 0, False) & 1:     # SCTLR.M
+        return va
+    ttbr = uc.cpr_read(15, 0, 2, 0, 0, 0, False) & ~0x3FFF
+    l1, = struct.unpack("<I", board.mem_read(ttbr + (va >> 20) * 4, 4))
+    if l1 & 3 == 2:
+        if l1 & (1 << 18):                                 # supersection
+            return (l1 & 0xFF000000) | (va & 0xFFFFFF)
+        return (l1 & 0xFFF00000) | (va & 0xFFFFF)
+    if l1 & 3 == 1:
+        l2, = struct.unpack("<I", board.mem_read(
+            (l1 & 0xFFFFFC00) + ((va >> 12) & 0xFF) * 4, 4))
+        if l2 & 2:
+            return (l2 & 0xFFFFF000) | (va & 0xFFF)
+        if l2 & 3 == 1:
+            return (l2 & 0xFFFF0000) | (va & 0xFFFF)
+    raise ValueError(f"0x{va:x} is not mapped")
+
+
 def dump_regs(board):
     uc = board.uc
     if board.aarch64:
@@ -698,12 +724,15 @@ def dump_regs(board):
             md = Cs(CS_ARCH_ARM, CS_MODE_THUMB)
         else:
             md = Cs(CS_ARCH_ARM, CS_MODE_ARM)
-        code = bytes(uc.mem_read(pc - 16, 32))
+        start = pc - 16
+        if not board.aarch64:
+            start = arm32_virt_to_phys(board, start)
+        code = bytes(uc.mem_read(start, 32))
         for insn in md.disasm(code, pc - 16):
             mark = "=>" if insn.address == pc else "  "
             print(f"    {mark} {board.syms(insn.address)}: "
                   f"{insn.mnemonic} {insn.op_str}")
-    except (ImportError, UcError):
+    except (ImportError, UcError, ValueError):
         pass
 
 
@@ -946,6 +975,10 @@ def main():
                    help="3rd-stage NSIH2 image, placed at BL1's DEVICEADDR "
                         "(default: %(default)s)")
     p.add_argument("--sd-image", help="raw SD card image instead of --bl1/--next")
+    p.add_argument("--load", action="append", default=[], metavar="FILE@ADDR",
+                   help="copy FILE into DDR at ADDR before the boot starts "
+                        "(repeatable), e.g. a zImage and a .dtb for u-boot to "
+                        "boot via --send")
     p.add_argument("--elf", action="append", default=[],
                    help="ELF to take symbol names from (repeatable). Default: "
                         "the .elf next to --bl1, and stage2.elf there if present")
@@ -996,6 +1029,14 @@ def main():
     sd = build_sd(args)
     info = describe_images(sd)
     board = Board(args, sd, syms, uboot_syms)
+    for spec in args.load:
+        path, _, addr = spec.rpartition("@")
+        if not path:
+            p.error(f"--load {spec}: expected FILE@ADDR")
+        with open(path, "rb") as f:
+            data = f.read()
+        board.mem_write(int(addr, 0), data)
+        log(f"loaded {path} (0x{len(data):x} bytes) at 0x{int(addr, 0):x}")
     entry = boot_rom(board, info)
     rc = run(board, info, entry)
     if args.screenshot and board.screens:

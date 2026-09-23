@@ -127,6 +127,27 @@ A 32-bit u-boot (`UBOOT_ARCH=aarch32`) runs the same way: pass its
 `u-boot-direct.img` with `--next`; the `u-boot` ELF next to it provides
 the symbols.
 
+`--load FILE@ADDR` puts files in DDR before the boot starts, e.g. to boot
+linux_kernel_gec6818's 32-bit kernel (`gec6818_aarch32_defconfig`) without
+building an ext4 SD image:
+
+```
+K=../linux_kernel_gec6818   # or its O= build directory
+.venv/bin/python tools/s5p6818_emu.py --next 32-bit/u-boot-direct.img \
+    --elf out/bl1-gec6818.elf --elf $K/vmlinux \
+    --load $K/arch/arm/boot/zImage@0x40008000 \
+    --load $K/arch/arm/boot/dts/s5p6818-gec6818-rev01.dtb@0x49000000 \
+    --send '\nsetenv bootargs "console=ttySAC0,115200n8 earlycon=s5p6818,0xc00a1000 lpj=1000000"\nbootz 0x40008000 - 0x49000000\n' \
+    --timeout 200 --hang-seconds 20
+```
+
+The kernel gets through `start_kernel` (memory, clocks, timer, VFP) into
+the initcalls, then stops with a data abort in `futex_init`, which
+touches NULL on purpose and relies on the abort handler. The emulator
+doesn't deliver exceptions or interrupts to the guest, so that is as far
+as Linux gets here. `lpj=` skips the delay-loop calibration, which would
+need timer interrupts.
+
 In `--send`, the first byte only stops the autoboot countdown and is
 dropped, hence the leading `\n`. Commands that print a lot (`md`) poll for
 Ctrl-C and eat whatever is queued behind them, so put them last. The SD card is `mmc 1` in u-boot; `mmc 0`
@@ -285,6 +306,24 @@ python3 -m venv .venv
 
 32 位 u-boot（`UBOOT_ARCH=aarch32`）也一样跑：用 `--next` 指定它的 `u-boot-direct.img`，
 同目录下的 `u-boot` ELF 会被用来提供符号。
+
+`--load FILE@ADDR` 在启动前把文件放进 DDR，比如不做 ext4 SD 镜像，直接启动
+linux_kernel_gec6818 的 32 位内核（`gec6818_aarch32_defconfig`）：
+
+```
+K=../linux_kernel_gec6818   # 或者它的 O= 编译目录
+.venv/bin/python tools/s5p6818_emu.py --next 32-bit/u-boot-direct.img \
+    --elf out/bl1-gec6818.elf --elf $K/vmlinux \
+    --load $K/arch/arm/boot/zImage@0x40008000 \
+    --load $K/arch/arm/boot/dts/s5p6818-gec6818-rev01.dtb@0x49000000 \
+    --send '\nsetenv bootargs "console=ttySAC0,115200n8 earlycon=s5p6818,0xc00a1000 lpj=1000000"\nbootz 0x40008000 - 0x49000000\n' \
+    --timeout 200 --hang-seconds 20
+```
+
+内核能走完 `start_kernel`（内存、时钟、定时器、VFP）进入 initcall，然后在 `futex_init`
+里停在一次数据异常上：那里故意访问 NULL，靠异常处理返回。模拟器不会把异常和中断
+投递给客户机，所以 Linux 在这里只能跑到这一步。`lpj=` 用来跳过延时循环校准，
+那一步需要定时器中断。
 
 `--send` 的第一个字节只用来打断 autoboot 倒计时，会被吃掉，所以开头放一个 `\n`。
 输出很多的命令（比如 `md`）会检查 Ctrl-C，把排在后面的输入吃掉，所以放在最后。
