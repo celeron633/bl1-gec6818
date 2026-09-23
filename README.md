@@ -148,6 +148,15 @@ doesn't deliver exceptions or interrupts to the guest, so that is as far
 as Linux gets here. `lpj=` skips the delay-loop calibration, which would
 need timer interrupts.
 
+The 64-bit kernel (default BL1 and u-boot, `gec6818_linux_defconfig`)
+boots the same way with `--load .../arch/arm64/boot/Image@0x40080000`,
+the arm64 dtb and `booti 0x40080000 - 0x49000000`. Its PSCI calls are
+the one exception the emulator does deliver: an AArch64 SMC enters BL1's
+resident EL3 handler (`--trace-smc` lists them), so this checks BL1's
+PSCI end to end. The kernel reports `PSCIv1.0 detected in firmware`,
+gets into the initcalls and ends idle in `cpu_do_idle` (WFI), waiting
+for a timer interrupt that never comes.
+
 In `--send`, the first byte only stops the autoboot countdown and is
 dropped, hence the leading `\n`. Commands that print a lot (`md`) poll for
 Ctrl-C and eat whatever is queued behind them, so put them last. The SD card is `mmc 1` in u-boot; `mmc 0`
@@ -324,6 +333,13 @@ K=../linux_kernel_gec6818   # 或者它的 O= 编译目录
 里停在一次数据异常上：那里故意访问 NULL，靠异常处理返回。模拟器不会把异常和中断
 投递给客户机，所以 Linux 在这里只能跑到这一步。`lpj=` 用来跳过延时循环校准，
 那一步需要定时器中断。
+
+64 位内核（默认的 BL1 和 u-boot，`gec6818_linux_defconfig`）也一样启动：
+`--load .../arch/arm64/boot/Image@0x40080000`、arm64 的 dtb，命令用
+`booti 0x40080000 - 0x49000000`。它的 PSCI 调用是模拟器唯一会投递的异常：AArch64 的
+SMC 会进入 BL1 常驻 EL3 的处理程序（`--trace-smc` 可以列出每一次），所以这能端到端地
+检查 BL1 的 PSCI。内核会打印 `PSCIv1.0 detected in firmware`，进入 initcall，最后在
+`cpu_do_idle`（WFI）里空闲，等一个永远不会来的定时器中断。
 
 `--send` 的第一个字节只用来打断 autoboot 倒计时，会被吃掉，所以开头放一个 `\n`。
 输出很多的命令（比如 `md`）会检查 Ctrl-C，把排在后面的输入吃掉，所以放在最后。

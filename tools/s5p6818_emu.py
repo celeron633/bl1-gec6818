@@ -30,8 +30,8 @@ What is emulated:
     reports failure and BL1 carries on anyway.
 
 Not emulated: secondary cores (BL1 reports them dead), interrupts, eMMC,
-SD writes, exceptions (a guest exception stops the run and is reported,
-so PSCI SMCs from an OS won't work, and a 32-bit Linux stops at the
+SD writes, exceptions other than an AArch64 SMC to EL3 (any other guest
+exception stops the run and is reported; a 32-bit Linux stops at the
 deliberate NULL access in futex_init).
 
 The run ends when the guest waits for console input (e.g. at the u-boot
@@ -53,7 +53,7 @@ import time
 import zlib
 
 from unicorn import (Uc, UcError, UC_ARCH_ARM, UC_ARCH_ARM64, UC_MODE_ARM,
-                     UC_PROT_ALL, UC_HOOK_BLOCK, UC_HOOK_INSN, UC_HOOK_INTR,
+                     UC_PROT_ALL, UC_HOOK_BLOCK, UC_HOOK_INTR,
                      UC_HOOK_MEM_UNMAPPED)
 from unicorn import arm_const as A32
 from unicorn import arm64_const as A64
@@ -74,6 +74,7 @@ DREX, DDRPHY = 0xC00E0000, 0xC00E1000
 CCI400 = 0xE0090000
 TIMER = 0xC0017000
 GMAC = 0xC0060000
+GICD = 0xC0009000
 MLC0 = 0xC0102000
 # register -> dirty flag: MLCCONTROLT, RGB layer 0 and 1 MLCCONTROL
 MLC_DIRTY = {MLC0: 1 << 3, MLC0 + 0x24: 1 << 4, MLC0 + 0x58: 1 << 4}
@@ -518,6 +519,8 @@ class Board:
                 v = 0xFFFF
             elif addr == GMAC + 0x1000:   # DMA bus mode: soft reset done
                 v &= ~1
+            elif GICD + 0x800 <= addr < GICD + 0x820:
+                v = 0x01010101          # ITARGETSR0-7 (banked): CPU0
         if self.args.log_mmio:
             self.log_mmio("R", addr, v)
         return v
@@ -824,6 +827,11 @@ def install_hooks(board, uc, info):
     uc.hook_add(UC_HOOK_BLOCK, on_block)
 
     def on_intr(uc, intno, _):
+        if board.aarch64 and intno == 1 and impdef_sysreg(board, uc):
+            return
+        if board.aarch64 and intno == 13:
+            smc_to_el3(board, uc)
+            return
         board.stop_reason = (f"CPU exception {intno} "
                              f"({EXCEPTIONS.get(intno, 'unknown')})")
         uc.emu_stop()
@@ -836,28 +844,59 @@ def install_hooks(board, uc, info):
 
     uc.hook_add(UC_HOOK_MEM_UNMAPPED, on_unmapped)
 
-    if board.aarch64:
-        # Cortex-A53 IMPLEMENTATION DEFINED registers (L2CTLR_EL1,
-        # CPUECTLR_EL1, ...: op1=1, CRn=11/15) aren't in Unicorn's A53
-        # model. Plain storage is all BL1/u-boot need. The fields are
-        # decoded from the instruction itself (Unicorn 2.1 reports CRn as
-        # 0), and a handled instruction doesn't advance PC by itself.
-        def on_sysreg(uc, reg, cp, is_read):
-            pc = uc.reg_read(A64.UC_ARM64_REG_PC)
-            insn = struct.unpack("<I", uc.mem_read(pc, 4))[0]
-            op1, crn = (insn >> 16) & 7, (insn >> 12) & 0xF
-            if not ((insn >> 19) & 3 == 3 and op1 == 1 and crn in (11, 15)):
-                return False
-            key = (crn, (insn >> 8) & 0xF, (insn >> 5) & 7)
-            if is_read:
-                uc.reg_write(reg, board.impdef.get(key, 0))
-            else:
-                board.impdef[key] = cp.val
-            uc.reg_write(A64.UC_ARM64_REG_PC, pc + 4)
-            return True
 
-        uc.hook_add(UC_HOOK_INSN, on_sysreg, True, 1, 0, A64.UC_ARM64_INS_MRS)
-        uc.hook_add(UC_HOOK_INSN, on_sysreg, False, 1, 0, A64.UC_ARM64_INS_MSR)
+
+def impdef_sysreg(board, uc):
+    """Emulate an MRS/MSR of a Cortex-A53 IMPLEMENTATION DEFINED register
+    (L2CTLR_EL1, CPUECTLR_EL1, ...: op0=3, op1=1, CRn=11/15), which
+    Unicorn's A53 model doesn't have and so traps as undefined. Plain
+    storage is all BL1 needs. Only BL1 touches these, with the MMU off, so
+    PC is a physical address. Returns False for any other instruction."""
+    pc = uc.reg_read(A64.UC_ARM64_REG_PC)
+    try:
+        insn, = struct.unpack("<I", board.mem_read(pc, 4))
+    except ValueError:
+        return False
+    is_read = insn & 0xFFF00000 == 0xD5300000
+    if not (is_read or insn & 0xFFF00000 == 0xD5100000):
+        return False
+    op1, crn = (insn >> 16) & 7, (insn >> 12) & 0xF
+    if not ((insn >> 19) & 3 == 3 and op1 == 1 and crn in (11, 15)):
+        return False
+    key, rt = (crn, (insn >> 8) & 0xF, (insn >> 5) & 7), insn & 31
+    reg = getattr(A64, f"UC_ARM64_REG_X{rt}", None)
+    if is_read and reg:
+        uc.reg_write(reg, board.impdef.get(key, 0))
+    elif not is_read:
+        board.impdef[key] = uc.reg_read(reg) if reg else 0
+    uc.reg_write(A64.UC_ARM64_REG_PC, pc + 4)
+    return True
+
+
+def smc_to_el3(board, uc):
+    """Take an SMC from EL1/EL2 to EL3, as the CPU would (Unicorn stops
+    at exceptions instead of delivering them): ELR/SPSR/ESR_EL3, the
+    current SP into its bank, EL3h with DAIF masked, then VBAR_EL3 + 0x400
+    (synchronous, from a lower EL in AArch64). The handler's ERET is
+    executed by Unicorn itself. This is how an AArch64 kernel's PSCI calls
+    reach BL1's resident psciHandler."""
+    pc = uc.reg_read(A64.UC_ARM64_REG_PC)     # already past the SMC
+    pstate = uc.reg_read(A64.UC_ARM64_REG_PSTATE)
+    el = (pstate >> 2) & 3
+    bank = getattr(A64, f"UC_ARM64_REG_SP_EL{el if pstate & 1 else 0}")
+    uc.reg_write(bank, uc.reg_read(A64.UC_ARM64_REG_SP))
+    uc.reg_write(A64.UC_ARM64_REG_ELR_EL3, pc)
+    uc.cpr_write(3, 6, 4, 0, 0, pstate)                        # SPSR_EL3
+    uc.reg_write(A64.UC_ARM64_REG_ESR_EL3, (0x17 << 26) | (1 << 25))
+    enter_el3_aarch64(uc)
+    uc.reg_write(A64.UC_ARM64_REG_SP, uc.reg_read(A64.UC_ARM64_REG_SP_EL3))
+    uc.reg_write(A64.UC_ARM64_REG_PC,
+                 uc.reg_read(A64.UC_ARM64_REG_VBAR_EL3) + 0x400)
+    if board.args.trace_smc:
+        log(f"smc from EL{el}: x0=0x{uc.reg_read(A64.UC_ARM64_REG_X0):x} "
+            f"x1=0x{uc.reg_read(A64.UC_ARM64_REG_X1):x} "
+            f"x2=0x{uc.reg_read(A64.UC_ARM64_REG_X2):x}, "
+            f"return to {board.syms(pc)}")
 
 
 def warm_reset(board):
@@ -949,7 +988,9 @@ def run(board, info, entry):
                 pc = warm_reset(board)
                 install_hooks(board, board.uc, info)
                 continue
-            reason = board.stop_reason or "guest stopped"
+            reason = board.stop_reason or (
+                "guest stopped, e.g. idle in WFI - no interrupt will wake "
+                "it, they aren't emulated")
             log(f"stopped at {board.syms(board.pc())}: {reason}")
             if reason in ("quit", "waiting for console input") or \
                reason.startswith("timeout"):
@@ -1001,6 +1042,8 @@ def main():
                    help="print every entry to a known symbol (function or "
                         "label)")
     p.add_argument("--trace-sd", action="store_true", help="print SD commands")
+    p.add_argument("--trace-smc", action="store_true",
+                   help="print every SMC (PSCI call) taken to EL3")
     p.add_argument("--screenshot", metavar="PREFIX",
                    help="save the LCD (MLC0) as PREFIX-N.png each time it "
                         "changes, and as PREFIX-final.png at the end")
