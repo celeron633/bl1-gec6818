@@ -68,6 +68,13 @@ SKIP_ATF			?= y
 # the reference-nsih/raptor-*-64.txt header tools/mk_bl1_image.py builds
 # BL1's header from, and patches its PortNumber byte to match.
 BOOT_PORT			?= sd
+# BOOT_LOGO=y: after DDR init, light up the RGB LCD (AT070TN92) and show
+# BOOT_LOGO_TEXT centered on it (src/display.c). LCD_BACKLIGHT=high|low
+# also drives the backlight pad (GPIOD1/PWM0) to that level; the default
+# leaves it alone, since which level means "on" is not known yet.
+BOOT_LOGO			?= y
+BOOT_LOGO_TEXT			?= S5P6818 BootROM Loading...
+LCD_BACKLIGHT			?= none
 
 # cross-tool pre-header
 ifeq ($(OPMODE), aarch32)
@@ -197,6 +204,16 @@ endif
 
 ifeq ($(SKIP_ATF), y)
 CFLAGS				+=	-DSKIP_ATF
+endif
+
+ifeq ($(BOOT_LOGO), y)
+CFLAGS				+=	-DBOOT_LOGO -DBOOT_LOGO_TEXT='"$(BOOT_LOGO_TEXT)"'
+ifeq ($(LCD_BACKLIGHT), high)
+CFLAGS				+=	-DLCD_BACKLIGHT_LEVEL=1
+endif
+ifeq ($(LCD_BACKLIGHT), low)
+CFLAGS				+=	-DLCD_BACKLIGHT_LEVEL=0
+endif
 endif
 
 ifeq ($(OPMODE) , aarch32)

@@ -69,6 +69,14 @@ Add `BOOT_PORT=emmc` to boot from eMMC instead of SD. The no-ATF
 configurations need u-boot's `u-boot-direct.img` (`make u-boot-direct.img`
 in u-boot_gec6818), not `fip-nonsecure.img`.
 
+Right after DDR init, BL1 turns on the RGB LCD (AT070TN92, 800x480) and
+prints `BOOT_LOGO_TEXT` in the middle of it (`src/display.c`, about 2.8KB
+including the font), until u-boot sets up the display for its own logo.
+`make BOOT_LOGO=n` leaves it out, `make BOOT_LOGO_TEXT='...'` changes the
+text. The backlight pad (GPIOD1/PWM0) is left alone unless you pass
+`LCD_BACKLIGHT=high` or `LCD_BACKLIGHT=low`, because nobody has checked
+on hardware yet which level turns it on.
+
 GitHub Actions builds the default configuration (plus `u-boot-direct.img`)
 on every push and uploads them as a workflow artifact - see the badge above, or
 `.github/workflows/build.yml`.
@@ -107,6 +115,7 @@ at BL1's DEVICEADDR (0x10200), and symbols come from `out/*.elf` and
 .venv/bin/python tools/s5p6818_emu.py --send '\nmmc dev 1\nmmc info\n'   # scripted u-boot commands
 .venv/bin/python tools/s5p6818_emu.py --bl1 other/bl1.bin --next other/u-boot-direct.img
 .venv/bin/python tools/s5p6818_emu.py --sd-image sd.img    # a raw SD card image instead
+.venv/bin/python tools/s5p6818_emu.py --screenshot lcd      # also save the LCD as lcd-N.png
 ```
 
 In `--send`, the first byte only stops the autoboot countdown and is
@@ -217,6 +226,12 @@ make clean && make OPMODE=aarch32 SKIP_ATF=n CROSS_TOOL=arm-linux-gnueabi-   # A
 加 `BOOT_PORT=emmc` 改为从 eMMC 启动。不走 ATF 的两种配置要配 u-boot 的
 `u-boot-direct.img`（在 u-boot_gec6818 里 `make u-boot-direct.img`），不是 `fip-nonsecure.img`。
 
+DDR 初始化完成后，BL1 会点亮 RGB 屏（AT070TN92，800x480），在屏幕中间显示
+`BOOT_LOGO_TEXT`（`src/display.c`，连字库约 2.8KB），直到 u-boot 重新初始化显示、
+画它自己的 logo。`make BOOT_LOGO=n` 去掉这个功能，`make BOOT_LOGO_TEXT='...'`
+改文字。背光脚（GPIOD1/PWM0）默认不动，要驱动它就加 `LCD_BACKLIGHT=high` 或
+`LCD_BACKLIGHT=low`——哪个电平是亮，还没在板子上确认过。
+
 每次 push，GitHub Actions 会编译默认配置（以及配套的 `u-boot-direct.img`），打包成
 workflow artifact 上传——看上面的徽章，或者 `.github/workflows/build.yml`。
 
@@ -251,6 +266,7 @@ python3 -m venv .venv
 .venv/bin/python tools/s5p6818_emu.py --send '\nmmc dev 1\nmmc info\n'   # 自动输入 u-boot 命令
 .venv/bin/python tools/s5p6818_emu.py --bl1 other/bl1.bin --next other/u-boot-direct.img
 .venv/bin/python tools/s5p6818_emu.py --sd-image sd.img    # 直接用一个 SD 卡原始镜像
+.venv/bin/python tools/s5p6818_emu.py --screenshot lcd      # 同时把屏幕内容存成 lcd-N.png
 ```
 
 `--send` 的第一个字节只用来打断 autoboot 倒计时，会被吃掉，所以开头放一个 `\n`。

@@ -65,6 +65,9 @@ extern int CRC_Check(void* buf, unsigned int size, unsigned int ref_crc);
 extern void SwitchToEL2(void);
 extern void psciInit(U32 bootCpu);
 #endif
+#if defined(BOOT_LOGO)
+extern void DisplayBanner(const char *text);
+#endif
 extern U32 GetCurrentSMode(void);
 
 void simple_memtest(U32 *pStart, U32 *pEnd);
@@ -351,6 +354,12 @@ void BootMain(U32 CPUID)
 	pwm_reset();
 	/* Temporary Code - Timer Reset */
 	timer_reset();
+
+#if defined(BOOT_LOGO)
+	/* needs DDR for the framebuffer; on resume the kernel owns the LCD */
+	if (!isResume)
+		DisplayBanner(BOOT_LOGO_TEXT);
+#endif
 
 #if (CCI400_COHERENCY_ENABLE == 1)
 	SYSMSG("CCI Init!\r\n");

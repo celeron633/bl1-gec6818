@@ -39,6 +39,10 @@ SYS_OBJS	+=	init_LPDDR3.o
 endif
 
 SYS_OBJS	+=	CRYPTO.o
+
+ifeq ($(BOOT_LOGO),y)
+SYS_OBJS	+=	display.o
+endif
 #SYS_OBJS	+=	nx_tieoff.o
 
 ifeq ($(INITPMIC),YES)

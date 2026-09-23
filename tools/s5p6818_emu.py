@@ -20,6 +20,9 @@ What is emulated:
     (or --sd-image). u-boot calls that port "mmc 1"; its "mmc 0" (eMMC,
     SDMMC2) has nothing attached.
   - PWM timer counting at 1 MHz host time (u-boot's time base).
+  - LCD, as pictures only: with --screenshot, every time MLC0 is enabled
+    (top dirty flag written) its background and XRGB8888 RGB layers are
+    rendered from DDR to PREFIX-N.png, and once more at the end.
   - PLL/DDR/CCI/GMAC status polls report "done" (GMAC: no PHY). Everything
     else is plain read-back-what-was-written storage, so DDR training
     reports failure and BL1 carries on anyway.
@@ -44,6 +47,7 @@ import struct
 import sys
 import threading
 import time
+import zlib
 
 from unicorn import (Uc, UcError, UC_ARCH_ARM, UC_ARCH_ARM64, UC_MODE_ARM,
                      UC_PROT_ALL, UC_HOOK_BLOCK, UC_HOOK_INSN, UC_HOOK_INTR,
@@ -67,6 +71,8 @@ DREX, DDRPHY = 0xC00E0000, 0xC00E1000
 CCI400 = 0xE0090000
 TIMER = 0xC0017000
 GMAC = 0xC0060000
+MLC0 = 0xC0102000
+MLC_TOP_DIRTY = 1 << 3
 
 # Unicorn/QEMU exception numbers (UC_HOOK_INTR)
 EXCEPTIONS = {1: "undefined instruction", 2: "SVC", 3: "prefetch abort",
@@ -81,6 +87,17 @@ def log(msg):
 
 # --------------------------------------------------------------------------
 # Symbols
+
+def write_png(path, w, h, rgb):
+    def chunk(kind, data):
+        return (struct.pack(">I", len(data)) + kind + data +
+                struct.pack(">I", zlib.crc32(kind + data)))
+    raw = b"".join(b"\0" + rgb[y * w * 3:(y + 1) * w * 3] for y in range(h))
+    with open(path, "wb") as f:
+        f.write(b"\x89PNG\r\n\x1a\n" +
+                chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)) +
+                chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+
 
 def read_elf_symbols(path):
     """{name: address} of the FUNC/NOTYPE symbols in an ELF32/ELF64 LE
@@ -414,6 +431,7 @@ class Board:
                             if args.send else b"")
         self.uc, self.aarch64 = None, False
         self.impdef = {}
+        self.screens = 0
 
         nsih = sd[0x200:0x400]
         port = nsih[0x50] if len(nsih) > 0x50 else 0
@@ -509,10 +527,52 @@ class Board:
             dev.write(addr & 0xFFF, size, value)
             return
         self.regs[addr & ~3] = value
+        if addr == MLC0 and value & MLC_TOP_DIRTY and self.args.screenshot:
+            self.screens += 1
+            self.screenshot(f"{self.args.screenshot}-{self.screens}.png")
         if addr == CLKPWR + CPUWARMRESETREQ and value & 1:
             self.regs[addr] = value & ~1
             self.reset_request = True
             uc.emu_stop()
+
+    def screenshot(self, path):
+        """Render MLC0 as the panel would show it: background color, then
+        RGB layers 0 and 1 if enabled (XRGB8888 only), clipped to the
+        screen size."""
+        def reg(off):
+            return self.regs.get(MLC0 + off, 0)
+        size = reg(0x04)
+        w, h = (size & 0x7FF) + 1, ((size >> 16) & 0x7FF) + 1
+        img = bytearray((reg(0x08) & 0xFFFFFF).to_bytes(3, "big") * (w * h))
+        for layer in (0, 1):
+            base = 0x0C + layer * 0x34
+            ctrl = reg(base + 0x18)
+            if not ctrl & (1 << 5):
+                continue
+            if ctrl >> 16 != 0x0653:
+                log(f"screenshot: RGB layer {layer} format 0x{ctrl >> 16:04x} "
+                    f"not supported, skipped")
+                continue
+            lr, tb = reg(base), reg(base + 0x04)
+            sx, ex = (lr >> 16) & 0xFFF, min(lr & 0xFFF, w - 1)
+            sy, ey = (tb >> 16) & 0xFFF, min(tb & 0xFFF, h - 1)
+            vstride, addr = reg(base + 0x20), reg(base + 0x2C)
+            n = ex - sx + 1
+            if n <= 0:
+                continue
+            for y in range(sy, ey + 1):
+                try:
+                    row = self.mem_read(addr + (y - sy) * vstride, n * 4)
+                except ValueError:
+                    log(f"screenshot: RGB layer {layer} at 0x{addr:x} "
+                        f"is outside DDR, skipped")
+                    break
+                rgb = bytearray(n * 3)
+                rgb[0::3], rgb[1::3], rgb[2::3] = row[2::4], row[1::4], row[0::4]
+                o = (y * w + sx) * 3
+                img[o:o + n * 3] = rgb
+        write_png(path, w, h, img)
+        log(f"screenshot {path} ({w}x{h})")
 
     def log_mmio(self, rw, addr, v):
         if not isinstance(self.device(addr), UART):
@@ -881,6 +941,9 @@ def main():
                    help="print every entry to a known symbol (function or "
                         "label)")
     p.add_argument("--trace-sd", action="store_true", help="print SD commands")
+    p.add_argument("--screenshot", metavar="PREFIX",
+                   help="save the LCD (MLC0) as PREFIX-N.png each time it is "
+                        "enabled, and as PREFIX-final.png at the end")
     p.add_argument("--log-mmio", action="store_true",
                    help="print every non-UART MMIO access")
     args = p.parse_args()
@@ -907,7 +970,10 @@ def main():
     info = describe_images(sd)
     board = Board(args, sd, syms, uboot_syms)
     entry = boot_rom(board, info)
-    return run(board, info, entry)
+    rc = run(board, info, entry)
+    if args.screenshot and board.screens:
+        board.screenshot(f"{args.screenshot}-final.png")
+    return rc
 
 
 if __name__ == "__main__":
