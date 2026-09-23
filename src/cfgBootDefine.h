@@ -44,7 +44,17 @@
 //  System optional.
 //------------------------------------------------------------------------------
 #define MULTICORE_SLEEP_CONTROL (1)
+#if defined(SKIP_ATF) && defined(aarch64)
+/* No BL31 will ever run to power on secondary cores for PSCI CPU_ON, so
+ * the resident AArch64 code (the whole BL1 for OPMODE=aarch64, the
+ * stage2 stub for OPMODE=aarch32) powers them on itself and parks them
+ * at EL3 (subcpu.c SubCPUBoot(), psci.c). Off (0) for the normal ATF
+ * chain, where BL31 owns secondary CPU power-on, and for the AArch32
+ * BL1 build, which leaves that to its stage2. */
+#define MULTICORE_BRING_UP (1)
+#else
 #define MULTICORE_BRING_UP (0)
+#endif
 #define CCI400_COHERENCY_ENABLE (1)
 #define CONFIG_RESET_AFFINITY_ID (1) // Dependent kernel 3.18.x
 

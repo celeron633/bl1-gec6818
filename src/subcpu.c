@@ -53,6 +53,8 @@ void SetVectorLocation(U32 CPUID, CBOOL LowHigh)
 #endif
 
 #ifdef aarch64
+extern void Startup(void);
+
 void BringUpSlaveCPU(U32 CPUID)
 {
 	WriteIO32(&pReg_ClkPwr->CPURESETMODE, 0x1);
@@ -71,14 +73,14 @@ void SetVectorLocation(U32 CPUID, CBOOL LowHigh)
 		regvalue |= 1 << (4 + CPUID);
 		WriteIO32(&pReg_Tieoff->TIEOFFREG[96], regvalue);
 		WriteIO32(&pReg_Tieoff->TIEOFFREG[97 + (CPUID << 1)],
-			  0xFFFF0200 >> 2);
+			  (U32)(MPTRS)Startup >> 2);	// this image's entry
 	} else // cpu 0, 1, 2, 3
 	{
 		regvalue = ReadIO32(&pReg_Tieoff->TIEOFFREG[79]);
 		regvalue |= 1 << (12 + CPUID); // set cpu mode to AArch64
 		WriteIO32(&pReg_Tieoff->TIEOFFREG[79], regvalue);
 		WriteIO32(&pReg_Tieoff->TIEOFFREG[80 + (CPUID << 1)],
-			  0xFFFF0200 >> 2);
+			  (U32)(MPTRS)Startup >> 2);	// this image's entry
 	}
 }
 #endif
@@ -92,6 +94,7 @@ struct NX_SubCPUBringUpInfo {
 };
 void SwitchToEL2(void);
 void SetGIC_All(void);
+void psciSecondaryEntry(U32 CPUID);
 #define CPU_ALIVE_FLAG_ADDR 0xC0010230
 void SubCPUBoot(U32 CPUID)
 {
@@ -106,6 +109,9 @@ void SubCPUBoot(U32 CPUID)
 	//    printf("Hello World. I'm CPU %d!\r\n", CPUID);
 	pCPUStartInfo->WakeupFlag = 1;
 	DebugPutch('0' + CPUID);
+#if defined(aarch64) && defined(SKIP_ATF)
+	psciSecondaryEntry(CPUID);	// parks at EL3 until PSCI CPU_ON
+#endif
 #ifdef aarch64
 	SwitchToEL2();
 #endif

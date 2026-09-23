@@ -185,9 +185,9 @@ CPUBRINGUP:
         orr     w0, w0, #0x00FF0000
         add     x0, x0, #INTERNAL_SRAM_SIZE
 
-        mov     w1, #0x200                          // AArch64 stack point must be aligned by 16bytes
+        mov     w1, #0x400                          // 1KB per CPU: also the EL3 stack for SMCs (psci.c, printf); 16-byte aligned
         sub     w2, w29, #1
-        and     w2, w2, #0x7                        // cpu 0: -0x1C0, cpu 1: -0, cpu 2: -0x40,  3: -0x80, 4: -0xC0, 5: -0x100, 6: -0x140, 7: -0x180
+        and     w2, w2, #0x7                        // cpu 0: -0x1C00, cpu 1: -0, cpu 2: -0x400, 3: -0x800, ... 7: -0x1800
         mul     w1, w1, w2
         sub     x0, x0, x1
 
@@ -231,57 +231,104 @@ postloop:
 
         .ltorg
 
-//.global sync_asm_handler_EL3
-        .align 4
-.global synchrorous_vector_jump
-synchrorous_vector_jump:
-        adr     x0, sync_vector_value
-        ldr     w0, [x0]
-        br      x0
-sync_vector_value:
-        .long    sync_asm_handler_EL3
-
 .global    remap_vectors
-// void remap_vectors(U32 cpuid, U32 *synchrorous_vector_jump, void temp, U32 *__bss_end__);
+// void remap_vectors(U32 cpuid);
 remap_vectors:
-        ldr     x3, =__bss_end__
-        add     x3, x3, #0x7FF
-        bic     x3, x3, #0x7FF
-
-        cmp     x0, xzr
-        b.ne    2f
-
-        ldr     x1, =synchrorous_vector_jump
-        ldr     x2, [x1], #8
-//;        str     x2, [x3, #0x000]                    //; current Exception level with SP_EL0
-        str     x2, [x3, #0x200]                    //; current Exception level with SP_ELx, x>0
-        str     x2, [x3, #0x400]                    //; Lower Exception level with aarch64
-        str     x2, [x3, #0x600]                    //; Lower Exception level with aarch32
-        ldr     x2, [x1], #8
-//;        str     x2, [x3, #0x008]                    //; current Exception level with SP_EL0
-        str     x2, [x3, #0x208]                    //; current Exception level with SP_ELx, x>0
-        str     x2, [x3, #0x408]                    //; Lower Exception level with aarch64
-        str     x2, [x3, #0x608]                    //; Lower Exception level with aarch32
-
-2:
+        adr     x3, vectors_el3
         msr     VBAR_EL3, x3                        //; reset exception vector
-
         ret
 
         .ltorg
 //==================================================================
 // Exception Handler entry
+//
+// Full AArch64 exception vector table, replacing the old 3-slot patch
+// hack. Every entry saves the full register file, works out which
+// exception level's ESR to read from the vector offset, and calls
+// sync_c_handler_EL3(exc, esr, regs) in aarch64_exception_handler.c -
+// exc is this vector's own byte offset (0x000..0x780), which doubles
+// as the exception class (sync/IRQ/FIQ/SError x current/lower EL).
 //==================================================================
-    .align 3
-    .global sync_asm_handler_EL3
-sync_asm_handler_EL3:
-        PUSH_HANDLER_FRAME
-//;        b        .
-        bl      sync_c_handler_EL3
-        POP_HANDLER_FRAME
-        msr     elr_el3, x30                        //; lr
-        eret
+.Lexc_common:
+    stp     x27, x28, [sp, -16]!
+    stp     x25, x26, [sp, -16]!
+    stp     x23, x24, [sp, -16]!
+    stp     x21, x22, [sp, -16]!
+    stp     x19, x20, [sp, -16]!
+    stp     x17, x18, [sp, -16]!
+    stp     x15, x16, [sp, -16]!
+    stp     x13, x14, [sp, -16]!
+    stp     x11, x12, [sp, -16]!
+    stp     x9,  x10, [sp, -16]!
+    stp     x7,  x8,  [sp, -16]!
+    stp     x5,  x6,  [sp, -16]!
+    stp     x3,  x4,  [sp, -16]!
+    stp     x1,  x2,  [sp, -16]!
+    stp     xzr, x0,  [sp, -16]!
+    mrs     x1, CurrentEL
+    ubfx    x1, x1, 2, 2
+    cmp     x1, 3
+    b.eq    3f
+    cmp     x1, 2
+    b.eq    2f
+    mrs     x1, esr_el1
+    b       1f
+3:  mrs     x1, esr_el3
+    b       1f
+2:  mrs     x1, esr_el2
+1:  mov     x0, x29
+    add     x2, sp, 8
+    bl      sync_c_handler_EL3
+    ldp     xzr, x0,  [sp], 16
+    ldp     x1,  x2,  [sp], 16
+    ldp     x3,  x4,  [sp], 16
+    ldp     x5,  x6,  [sp], 16
+    ldp     x7,  x8,  [sp], 16
+    ldp     x9,  x10, [sp], 16
+    ldp     x11, x12, [sp], 16
+    ldp     x13, x14, [sp], 16
+    ldp     x15, x16, [sp], 16
+    ldp     x17, x18, [sp], 16
+    ldp     x19, x20, [sp], 16
+    ldp     x21, x22, [sp], 16
+    ldp     x23, x24, [sp], 16
+    ldp     x25, x26, [sp], 16
+    ldp     x27, x28, [sp], 16
+    ldp     x29, x30, [sp], 16
+    eret
 
+.macro vecentry
+    .align  7
+1:  stp     x29, x30, [sp, -16]!
+    mov     x29, 1b - vectors_el3
+    b       .Lexc_common
+.endm
+
+    // Own section: VBAR needs 2KB alignment, and inside .text that
+    // would push the whole output section - and Startup - off
+    // 0xFFFF0200, where the NSIH vector resets the core into.
+    .section .vectors, "ax"
+    .align 11
+.global vectors_el3
+vectors_el3:
+    vecentry /* 0x000 Current EL Synchronous Thread   (SP_EL0) */
+    vecentry /* 0x080 Current EL IRQ Thread           (SP_EL0) */
+    vecentry /* 0x100 Current EL FIQ Thread           (SP_EL0) */
+    vecentry /* 0x180 Current EL Error Thread         (SP_EL0) */
+    vecentry /* 0x200 Current EL Synchronous Handler  (SP_ELx) */
+    vecentry /* 0x280 Current EL IRQ Handler          (SP_ELx) */
+    vecentry /* 0x300 Current EL FIQ Handler          (SP_ELx) */
+    vecentry /* 0x380 Current EL Error Handler        (SP_ELx) */
+    vecentry /* 0x400 Lower EL Synchronous, AArch64 */
+    vecentry /* 0x480 Lower EL IRQ, AArch64 */
+    vecentry /* 0x500 Lower EL FIQ, AArch64 */
+    vecentry /* 0x580 Lower EL Error, AArch64 */
+    vecentry /* 0x600 Lower EL Synchronous, AArch32 */
+    vecentry /* 0x680 Lower EL IRQ, AArch32 */
+    vecentry /* 0x700 Lower EL FIQ, AArch32 */
+    vecentry /* 0x780 Lower EL Error, AArch32 */
+
+    .text
 
 .global ExceptionTest
 .global Startup_EL1

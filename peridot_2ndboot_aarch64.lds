@@ -31,6 +31,8 @@ SECTIONS
 		*(.text)
 	}
 
+	.vectors ALIGN(2048) : { *(.vectors) }
+
 	. = ALIGN(4);
 	.rodata : { *(.rodata*) }
 
@@ -58,4 +60,6 @@ SECTIONS
 	}
 	__bss_end__ = .;
 }
+
+ASSERT(Startup == 0x00000000FFFF0200, "Startup must be at 0x00000000FFFF0200, where the NSIH vector resets into")
 

@@ -45,10 +45,10 @@ GetCurrentSMode:
 //; unsigned int GetCPUID(void);
 GetCPUID:
 	mrs     x0, MPIDR_EL1			//; Get our cpu id
-	and     x1, x0, #0x3			//; cpu id
-	lsr     x0, x0, #8
-	and     x0, x0, #0x0F			//; check processor affinity
-	orr     x0, x1, x0			//; mark cpu group 0 or 1
+	and     x1, x0, #0x3			//; cpu id within cluster
+	tst     x0, #0xFF00			//; Aff1: cluster 1? (1 with
+	orr     x0, x1, #4			//; CONFIG_RESET_AFFINITY_ID, else 4)
+	csel    x0, x0, x1, ne			//; cluster 1 -> cpu 4..7
 	ret
 
 	.global GetSCR_EL3
@@ -97,7 +97,7 @@ SwitchToEL2:
 //	orr		x0, x0, #(1<<11)		//; 0: CNTPS_xxx are only accessible in EL3, 1: if NS==0, EL3 and EL1 can access CNTPS_xxx
 	orr		x0, x0, #(1<<10)		//; 0: Lower levels are all AArch32, 1: The next lower level is AArch64
 //	orr		x0, x0, #(1<<9)			//; 0: Secure state inst fetches from Non-secure mem are permitted, 1: not permitted
-//	orr		x0, x0, #(1<<8)			//; 0: Hypervisor call is undefined, 1: call ferforms a Hypervisor
+	orr		x0, x0, #(1<<8)			//; 0: Hypervisor call is undefined, 1: call ferforms a Hypervisor
 //	orr		x0, x0, #(1<<7)			//; 0: SMC is enabled, 1: disabled
 //	orr		x0, x0, #(1<<3)			//; 0: External Abort and SError interrupt are not taken to EL3, taken to EL3
 	orr		x0, x0, #(1<<2)			//;	0: Physical FIQ are not taken to EL3, 1: taken to EL3
@@ -127,6 +127,43 @@ SwitchToEL2:
 
 	msr		elr_el3, x30		//; lr
 	eret
+
+#if defined(SKIP_ATF)
+	.global PrepareNonSecureEntry
+//; void PrepareNonSecureEntry(unsigned long entry)
+//; Set up for an eret from EL3 into EL2 non-secure at entry, the way a
+//; PSCI CPU_ON'd core or BL33 expects to start: EL2h, DAIF masked,
+//; SCTLR_EL2 MMU/caches off, HVC enabled (Linux' hyp stub and KVM use it).
+PrepareNonSecureEntry:
+	mov		x1, #(3<<4)			//; RES1
+	orr		x1, x1, #(1<<10)		//; RW: next lower level is AArch64
+	orr		x1, x1, #(1<<8)			//; HCE: HVC enabled
+	orr		x1, x1, #(1<<2)			//; FIQ taken to EL3
+	orr		x1, x1, #(1<<0)			//; NS
+	msr		scr_el3, x1
+	msr		cptr_el3, xzr
+	mov		x1, #0x33FF			//; RES1
+	msr		cptr_el2, x1
+	mov		x1, #0x0830			//; RES1
+	movk	x1, #0x30C5, lsl #16		//; RES1
+	msr		sctlr_el2, x1
+	msr		elr_el3, x0
+	mov		x1, #0x3c9			//; D, A, I, F, EL2h
+	msr		spsr_el3, x1
+	ret
+
+	.global EnterNonSecure
+//; void EnterNonSecure(unsigned long entry, unsigned long context) - no return
+EnterNonSecure:
+	mov		x19, x1
+	bl		PrepareNonSecureEntry
+	mov		x0, x19
+	mov		x1, xzr
+	mov		x2, xzr
+	mov		x3, xzr
+	isb
+	eret
+#endif
 
 	.global SwitchToEL1
 //; void SwitchToEL1(void)

@@ -57,6 +57,12 @@ SYSLOG				?= y
 # Secure Boot
 SECURE_ON			?= 0
 
+# Skip ARM Trusted Firmware (fip-loader.img/fip-secure.img) and jump
+# directly from BL1 to the 3rd-stage image (u-boot). Brings up a minimal
+# PSCI implementation in BL1 itself (see src/psci.c) since no BL31 will
+# ever run. See also MULTICORE_BRING_UP in src/cfgBootDefine.h.
+SKIP_ATF			?= n
+
 # Which device BL1 (and u-boot after it) boots from: sd or emmc. Picks
 # the reference-nsih/raptor-*-64.txt header tools/mk_bl1_image.py builds
 # BL1's header from, and patches its PortNumber byte to match.
@@ -186,6 +192,10 @@ endif
 
 ifeq ($(SECURE_ON), 1)
 CFLAGS				+=	-DSECURE_ON
+endif
+
+ifeq ($(SKIP_ATF), y)
+CFLAGS				+=	-DSKIP_ATF
 endif
 
 ifeq ($(OPMODE) , aarch32)

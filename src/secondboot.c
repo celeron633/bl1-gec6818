@@ -61,6 +61,10 @@ extern void SetSecureState(void);
 extern int memtester_main(unsigned int start, unsigned int end);
 
 extern int CRC_Check(void* buf, unsigned int size, unsigned int ref_crc);
+#if defined(SKIP_ATF)
+extern void SwitchToEL2(void);
+extern void psciInit(U32 bootCpu);
+#endif
 extern U32 GetCurrentSMode(void);
 
 void simple_memtest(U32 *pStart, U32 *pEnd);
@@ -331,6 +335,9 @@ void BootMain(U32 CPUID)
 	SYSMSG("Wakeup CPU ");
 
 #if (MULTICORE_BRING_UP == 1)
+#if defined(SKIP_ATF)
+	psciInit(CPUID);
+#endif
 	SubCPUBringUp(CPUID);
 #else
 	SYSMSG("(MULTICORE_BRING_UP=0, secondary cores left as-is)\r\n");
@@ -414,6 +421,24 @@ void BootMain(U32 CPUID)
 		SYSMSG(" Image Loading Done!\r\n");
 		SYSMSG("Launch to 0x%08X, currently EL%d\r\n",
 		       (MPTRS)pLaunch, GetCurrentSMode());
+#if defined(SKIP_ATF) && defined(aarch64)
+		/*
+		 * No fip-loader.img/fip-secure.img (ATF BL2/BL31) in this
+		 * chain: pTBI->LAUNCHADDR points straight at the next stage
+		 * (e.g. u-boot), which expects to run at EL2 non-secure like
+		 * BL31 would normally hand it off - not at EL3, which is
+		 * where we still are here. See aarch64_libs.S SwitchToEL2().
+		 * This eret's and *returns here*, now running at EL2NS, so
+		 * the pLaunch() call below still happens as normal.
+		 */
+		SwitchToEL2();
+		SYSMSG("after SwitchToEL2: EL%d\r\n", GetCurrentSMode());
+#endif
+#if defined(SKIP_ATF) && defined(aarch32)
+		/* u-boot is AArch64 and wants a resident EL3 for PSCI: hand
+		 * over to the AArch64 stage2 instead of jumping there. */
+		LaunchStage2(pTBI->LAUNCHADDR);
+#endif
 		temp = 0x10000000;
 		while (!DebugIsUartTxDone() && temp--);
 		pLaunch(0, 4330);

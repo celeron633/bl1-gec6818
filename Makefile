@@ -59,6 +59,14 @@ ifeq ($(MEMTEST),y)
 SYS_OBJS	+=	memtester.o
 endif
 
+# psci.c: EL3 PSCI handler for SKIP_ATF, where BL1 itself stays resident
+# at EL3 in place of BL31.
+ifeq ($(SKIP_ATF),y)
+ifeq ($(OPMODE),aarch64)
+SYS_OBJS	+=	psci.o
+endif
+endif
+
 SYS_OBJS_LIST	=	$(addprefix $(DIR_OBJOUTPUT)/,$(SYS_OBJS))
 
 SYS_INCLUDES	=	-I src				\
