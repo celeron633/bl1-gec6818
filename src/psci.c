@@ -9,18 +9,20 @@
  * S5P6818-family board), which implements this same trick for NanoPi M3.
  * https://github.com/rafaello7/bl1-nanopi-m3
  *
- * "Off" CPUs never actually lose power: they sit in wfi at EL3 (SubCPUBoot()
- * -> psciSecondaryEntry() at first boot, cpuOff() after a CPU_OFF) until
- * CPU_ON fills in their slot below and kicks them with an SGI.
+ * Secondaries stay off until CPU_ON, which fills in their slot below and
+ * powers them on (subcpu.c PowerOnSecondaryCPU()) into this image's
+ * Startup: SubCPUBoot() -> psciSecondaryEntry() finds its slot
+ * ON_PENDING and erets straight to the kernel's entry point. CPU_OFF
+ * doesn't cut power; the core waits in wfi at EL3 (cpuOff()).
  */
 #include "sysheader.h"
 
 extern U32 GetCPUID(void);
 extern void PrepareNonSecureEntry(unsigned long entry);
 extern void EnterNonSecure(unsigned long entry, unsigned long context);
+extern void PowerOnSecondaryCPU(U32 cpu);
 
 #define PSCI_NUM_CPUS		8
-#define PSCI_WAKE_SGI		1
 
 enum PsciErrorCodes {
 	PSCI_SUCCESS            =  0,
@@ -94,22 +96,18 @@ static int mpidrToCpu(unsigned long mpidr)
 }
 
 /*
- * Sleep at EL3 until CPU_ON marks this CPU ON_PENDING. IRQs aren't routed
- * to EL3 (SCR_EL3.IRQ=0) and are masked anyway, so the wake-up SGI is
- * never taken here - it only ends the wfi, and is then dropped so the
- * kernel doesn't see a stray IPI once it enables interrupts.
+ * Wait at EL3 until CPU_ON marks this CPU ON_PENDING. A freshly powered
+ * core finds that already set. A core parked by CPU_OFF sleeps in wfi:
+ * CPU_ON's power-on request either restarts it through Startup (and it
+ * comes back here with the slot set) or leaves it asleep - nothing else
+ * wakes it. A core must not spin here instead: on the board, one core
+ * busy at EL3 kept the next one from powering on.
  */
 static void waitForCpuOn(U32 cpu)
 {
-	/* the kernel may have shut this CPU interface down before CPU_OFF */
-	SetIO32(&pReg_GIC400->GICC.CTLR, 1 << 1);	// Group 1 enable
-	WriteIO32(&pReg_GIC400->GICD.ISENABLER[0], 1 << PSCI_WAKE_SGI);
-
 	while (cpus[cpu].state != PSCI_STATE_ON_PENDING)
 		__asm__ __volatile__("dsb sy\n\twfi" ::: "memory");
 
-	WriteIO32(&pReg_GIC400->GICD.CPENDSGIR[PSCI_WAKE_SGI / 4],
-		  0xFF << ((PSCI_WAKE_SGI % 4) * 8));
 	cpus[cpu].state = PSCI_STATE_ON;
 	__asm__ __volatile__("dsb sy" ::: "memory");
 }
@@ -118,6 +116,7 @@ static void waitForCpuOn(U32 cpu)
 void psciSecondaryEntry(U32 cpu)
 {
 	waitForCpuOn(cpu);
+	printf("psci: CPU%d on, entering 0x%lx\r\n", cpu, cpus[cpu].entry);
 	EnterNonSecure(cpus[cpu].entry, cpus[cpu].context);
 }
 
@@ -139,10 +138,7 @@ static long cpuOn(unsigned long targetCpu, unsigned long entryPoint,
 	cpus[cpu].state = PSCI_STATE_ON_PENDING;
 	__asm__ __volatile__("dsb sy" ::: "memory");
 
-	// NSATT=1: SGIs are Group 1 (SetGIC_All), which is all the target's
-	// CPU interface - possibly left configured by the kernel - forwards
-	WriteIO32(&pReg_GIC400->GICD.SGIR,
-		  1 << (cpu + 16) | 1 << 15 | PSCI_WAKE_SGI);
+	PowerOnSecondaryCPU(cpu);
 	return PSCI_SUCCESS;
 }
 

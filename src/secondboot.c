@@ -209,8 +209,14 @@ void initCCI400(void)
 		  0x3); // cpu 0~3 Snoop & DVM Req
 	while (ReadIO32(&pReg_CCI400->STSR) & 0x1);
 
-	WriteIO32(&pReg_CCI400->CSI[BUSID_CPUG1].SCR, 0x3); // cpu 4~7 Snoop & DVM Req
-	while (ReadIO32(&pReg_CCI400->STSR) & 0x1);
+	/*
+	 * Not cpu 4~7 yet: that cluster stays powered off until the kernel's
+	 * PSCI CPU_ON, and with its port taking DVM requests, the kernel's
+	 * first broadcast TLB/I-cache maintenance on CPU0 waits for it
+	 * forever (hung right after "Starting kernel"). Its first core to
+	 * come up enables the port itself - subcpu.c JoinCCI().
+	 */
+	WriteIO32(&pReg_CCI400->CSI[BUSID_CPUG1].SCR, 0x0);
 #else
 	WriteIO32(&pReg_CCI400->CSI[BUSID_CPUG0].SCR, 0x0);
 	WriteIO32(&pReg_CCI400->CSI[BUSID_CPUG1].SCR, 0x0);
@@ -418,7 +424,7 @@ void BootMain(U32 CPUID)
 	psciInit(CPUID);
 #endif
 	SubCPUBringUp(CPUID);
-	DisplayStep(45, "Secondary CPUs started");
+	DisplayStep(45, "Secondary CPUs: off until PSCI CPU_ON");
 #else
 	SYSMSG("(MULTICORE_BRING_UP=0, secondary cores left as-is)\r\n");
 #endif

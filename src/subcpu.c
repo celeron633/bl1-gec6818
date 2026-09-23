@@ -83,6 +83,15 @@ void SetVectorLocation(U32 CPUID, CBOOL LowHigh)
 			  (U32)(MPTRS)Startup >> 2);	// this image's entry
 	}
 }
+
+#if defined(SKIP_ATF)
+/* PSCI CPU_ON (psci.c): power the core on into this image's Startup. */
+void PowerOnSecondaryCPU(U32 CPUID)
+{
+	SetVectorLocation(CPUID, CTRUE);
+	BringUpSlaveCPU(CPUID);
+}
+#endif
 #endif
 
 #endif // #if (MULTICORE_BRING_UP == 1)
@@ -96,10 +105,40 @@ void SwitchToEL2(void);
 void SetGIC_All(void);
 void psciSecondaryEntry(U32 CPUID);
 #define CPU_ALIVE_FLAG_ADDR 0xC0010230
+
+#if defined(aarch64) && defined(SKIP_ATF)
+static void EnableCCIPort(U32 port)
+{
+	if ((ReadIO32(&pReg_CCI400->CSI[port].SCR) & 0x3) == 0x3)
+		return;
+	WriteIO32(&pReg_CCI400->CSI[port].SCR, 0x3); // Snoop & DVM Req
+	while (ReadIO32(&pReg_CCI400->STSR) & 0x1)
+		;
+}
+
+/*
+ * Put this core's cluster into CCI-400 coherency, the way BL31 does on
+ * cluster power-on: a port may only take snoop/DVM requests while its
+ * cluster is powered, so BL1 leaves cpu 4~7's off (secondboot.c
+ * initCCI400()). Cpu 0~3's port too, for the OPMODE=aarch32 stage2,
+ * whose BL1 left both off; CPU0's cluster is always up, so that's safe.
+ */
+static void JoinCCI(U32 CPUID)
+{
+	EnableCCIPort(BUSID_CPUG0);
+	if (CPUID & 0x4)
+		EnableCCIPort(BUSID_CPUG1);
+}
+#endif
+
 void SubCPUBoot(U32 CPUID)
 {
 	register struct NX_SubCPUBringUpInfo *pCPUStartInfo =
 	    (struct NX_SubCPUBringUpInfo *)CPU_ALIVE_FLAG_ADDR;
+
+#if defined(aarch64) && defined(SKIP_ATF)
+	JoinCCI(CPUID);
+#endif
 
 	SetGIC_All();
 	WriteIO32(&pReg_GIC400->GICD.ISENABLER[0], 0xFF); // enable sgi all
@@ -146,6 +185,22 @@ CBOOL SubCPUBringUp(U32 CPUID)
 	WriteIO32(&pReg_GIC400->GICC.CTLR, 0x07); // enable cpu interface
 	WriteIO32(&pReg_GIC400->GICC.PMR, 0xFF);  // all high priority
 	WriteIO32(&pReg_GIC400->GICD.CTLR, 0x03); // distributor enable
+
+#if defined(aarch64) && defined(SKIP_ATF)
+	/*
+	 * Leave the secondaries off: psci.c powers each one on when the
+	 * kernel asks for it (PSCI CPU_ON), like the vendor BL31 does.
+	 * Parking them at EL3 instead didn't work on the board - a parked
+	 * core never woke from wfi on the CPU_ON SGI, and one spinning
+	 * instead of sitting in wfi kept the next core from powering on.
+	 */
+	(void)pCPUStartInfo;
+	(void)retry;
+	(void)CPUNumber;
+	printf("Sub CPUs stay off until PSCI CPU_ON\r\n");
+	printf("CPU%d is Master!\r\n\n", CPUID);
+	return result;
+#endif
 
 	printf("Wakeup Sub CPU ");
 
