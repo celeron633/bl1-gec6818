@@ -97,6 +97,9 @@
 #define SUSPEND_SIGNATURE 		(0x50575200) /* PWR (ASCII) */
 #define BL1_SUSPEND_SIGNATURE		(0x01020304)
 #define USBREBOOT_SIGNATURE 		(0x85836666)
+/* SKIP_ATF, OPMODE=aarch32: marks a valid handoff at STAGE2_HANDOFF_ADDR
+ * (cfgBootDefine.h), so stage2 can tell BL1's jump apart from garbage. */
+#define STAGE2_AARCH64_SIGNATURE	(0x53363400) /* S64\0 (ASCII) */
 
 #define SDFSBOOT 			2
 #define UARTBOOT 			3

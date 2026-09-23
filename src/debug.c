@@ -94,6 +94,17 @@ const U32 UARTSMC[] =
 
 //------------------------------------------------------------------------------
 
+/*
+ * Point printf at a UART that's already set up, without DebugInit()'s
+ * clock/pinmux/baud work. For the SKIP_ATF stage2 (stage2_main.c): its
+ * own pReg_Uart starts out NULL, but UART0 is still running as AArch32
+ * BL1 left it - a CPU-only warm reset doesn't touch it.
+ */
+void DebugSetPort(U32 port)
+{
+	pReg_Uart = (struct NX_UART_RegisterSet *)((MPTRS)UARTBASEADDR[port]);
+}
+
 CBOOL DebugInit( U32 port )
 {
 	U32 SOURCE_CLOCK;

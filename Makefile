@@ -59,12 +59,30 @@ ifeq ($(MEMTEST),y)
 SYS_OBJS	+=	memtester.o
 endif
 
-# psci.c: EL3 PSCI handler for SKIP_ATF, where BL1 itself stays resident
-# at EL3 in place of BL31.
+# psci.c is AArch64 EL3 SMC handling: part of whatever AArch64 code stays
+# resident at EL3 under SKIP_ATF - this whole BL1 for OPMODE=aarch64, the
+# stage2 below for OPMODE=aarch32.
 ifeq ($(SKIP_ATF),y)
 ifeq ($(OPMODE),aarch64)
 SYS_OBJS	+=	psci.o
 endif
+endif
+
+# SKIP_ATF + OPMODE=aarch32: AArch32 BL1 hands off to an AArch64 stage2
+# (src/stage2_main.c) appended to its image - EL3 vectors + PSCI,
+# secondary cores parked, u-boot entered at EL2. Built by a sub-make with
+# the AArch64 toolchain (STAGE2=y), see the stage2 target below.
+ifeq ($(SKIP_ATF)-$(OPMODE),y-aarch32)
+BUILD_STAGE2		= y
+STAGE2_CROSS_TOOL	?= aarch64-none-elf-
+STAGE2_ELF		= $(DIR_TARGETOUTPUT)/stage2.elf
+STAGE2_BIN		= $(DIR_TARGETOUTPUT)/stage2.bin
+endif
+
+ifeq ($(STAGE2),y)
+SYS_OBJS	=	startup_aarch64.o aarch64_libs.o aarch64_exception_handler.o	\
+			stage2_main.o subcpu.o psci.o SecureManager.o			\
+			debug.o printf.o lib2ndboot.o clockinit.o GPIO.o resetcon.o
 endif
 
 SYS_OBJS_LIST	=	$(addprefix $(DIR_OBJOUTPUT)/,$(SYS_OBJS))
@@ -84,7 +102,16 @@ $(DIR_OBJOUTPUT)/%.o: src/%.S
 ###################################################################################################
 
 
-all: mkobjdir $(SYS_OBJS_LIST) link bin
+all: mkobjdir $(SYS_OBJS_LIST) link $(if $(BUILD_STAGE2),stage2) bin
+
+stage2:
+	@echo [stage2.... $(STAGE2_BIN)]
+	$(Q)$(MAKE) STAGE2=y OPMODE=aarch64 CROSS_TOOL=$(STAGE2_CROSS_TOOL)	\
+		DIR_OBJOUTPUT=obj-stage2 TARGET_NAME=stage2			\
+		LDS_NAME=peridot_2ndboot_aarch64_stage2 stage2-image
+
+stage2-image: mkobjdir $(SYS_OBJS_LIST) link
+	$(Q)$(MAKEBIN) -O binary $(DIR_TARGETOUTPUT)/$(TARGET_NAME).elf $(DIR_TARGETOUTPUT)/$(TARGET_NAME).bin
 
 mkobjdir:
 ifeq ($(OS),Windows_NT)
@@ -113,7 +140,11 @@ bin:
 	@echo [binary.... $(DIR_TARGETOUTPUT)/$(TARGET_NAME).bin]
 	$(Q)$(MAKEBIN) -O binary $(DIR_TARGETOUTPUT)/$(TARGET_NAME).elf $(DIR_TARGETOUTPUT)/$(TARGET_NAME)-raw.bin
 	@echo [header.... $(DIR_TARGETOUTPUT)/$(TARGET_NAME).bin, BOOT_PORT=$(BOOT_PORT)]
-	$(Q)python3 tools/mk_bl1_image.py $(DIR_TARGETOUTPUT)/$(TARGET_NAME)-raw.bin -o $(DIR_TARGETOUTPUT)/$(TARGET_NAME).bin --port $(BOOT_PORT) --opmode $(OPMODE)
+	$(Q)python3 tools/mk_bl1_image.py $(DIR_TARGETOUTPUT)/$(TARGET_NAME)-raw.bin -o $(DIR_TARGETOUTPUT)/$(TARGET_NAME).bin --port $(BOOT_PORT) --opmode $(OPMODE)	\
+		$(if $(BUILD_STAGE2),--stage2 $(STAGE2_BIN)							\
+		--stage2-addr 0x$$($(STAGE2_CROSS_TOOL)nm $(STAGE2_ELF) | awk '$$3 == "Startup" {print $$1}')	\
+		--stage2-end 0x$$($(STAGE2_CROSS_TOOL)nm $(STAGE2_ELF) | awk '$$3 == "__bss_end__" {print $$1}')	\
+		--bl1-end 0x$$($(CROSS_TOOL)nm $(DIR_TARGETOUTPUT)/$(TARGET_NAME).elf | awk '$$3 == "__bss_end__" {print $$1}'))
 ifeq ($(OS),Windows_NT)
 	@if exist $(DIR_OBJOUTPUT)			\
 		@$(RM) $(DIR_OBJOUTPUT)\buildinfo.o
@@ -137,6 +168,7 @@ else
 	@if	[ -e $(DIR_OBJOUTPUT) ]; then 		\
 		$(RMDIR) $(DIR_OBJOUTPUT);		\
 	fi;
+	@$(RMDIR) obj-stage2
 	@if	[ -e $(DIR_TARGETOUTPUT) ]; then 	\
 		$(RMDIR) $(DIR_TARGETOUTPUT);		\
 	fi;

@@ -69,6 +69,35 @@ extern U32 GetCurrentSMode(void);
 
 void simple_memtest(U32 *pStart, U32 *pEnd);
 
+#if defined(SKIP_ATF) && defined(aarch32)
+/*
+ * Reset CPU0 into AArch64 at the stage2 stub (STAGE2_AARCH64_ADDR), the
+ * same TIEOFF + warm-reset trick BootROM's NSIH vector uses to start an
+ * AArch64 BL1. u-boot's entry goes through SRAM, which survives the
+ * reset. No MMU/D-cache in this build, so nothing needs flushing.
+ */
+static void LaunchStage2(U32 entry)
+{
+	volatile U32 *handoff = (volatile U32 *)STAGE2_HANDOFF_ADDR;
+	U32 temp;
+
+	handoff[1] = entry;
+	handoff[0] = STAGE2_AARCH64_SIGNATURE;
+
+	SYSMSG("reset CPU0 into AArch64 stage2 @0x%08X, u-boot entry 0x%08X\r\n",
+	       STAGE2_AARCH64_ADDR, entry);
+	temp = 0x10000000;
+	while (!DebugIsUartTxDone() && temp--)
+		;
+
+	SetIO32(&pReg_Tieoff->TIEOFFREG[79], 1 << 12);	// CPU0 AArch64
+	WriteIO32(&pReg_Tieoff->TIEOFFREG[80], STAGE2_AARCH64_ADDR >> 2); // CPU0 RVBAR
+	SetIO32(&pReg_ClkPwr->CPUWARMRESETREQ, 1);	// CPU0 warm reset
+	while (1)
+		__asm__ __volatile__("wfi");
+}
+#endif
+
 #if defined(RAPTOR)
 /*
  * Raptor board - revision check. (H/W: GPIOE 4,5,6)

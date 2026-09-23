@@ -58,4 +58,20 @@
 #define CCI400_COHERENCY_ENABLE (1)
 #define CONFIG_RESET_AFFINITY_ID (1) // Dependent kernel 3.18.x
 
+#if defined(SKIP_ATF)
+/*
+ * SKIP_ATF with OPMODE=aarch32: the AArch64 stage2 (src/stage2_main.c,
+ * peridot_2ndboot_aarch64_stage2.lds) is appended to BL1's image at this
+ * address, so BootROM loads it into SRAM together with BL1. AArch32 BL1
+ * resets CPU0 into it once u-boot is in DDR; it stays resident as the
+ * EL3 PSCI firmware. Must match the .lds file's ". =".
+ *
+ * STAGE2_HANDOFF_ADDR: two words just below it - [0] =
+ * STAGE2_AARCH64_SIGNATURE, [1] = u-boot entry - written by AArch32 BL1
+ * before the reset (SRAM survives a CPU-only warm reset, registers don't).
+ */
+#define STAGE2_AARCH64_ADDR (0xFFFF8000)
+#define STAGE2_HANDOFF_ADDR (STAGE2_AARCH64_ADDR - 0x10)
+#endif
+
 #endif //	__CFG_BOOT_DEFINE_H__

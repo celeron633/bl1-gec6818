@@ -72,6 +72,16 @@ CODE_OFFSET = NSIH_SIZE
 # that header offset.
 B_SELF = 0xEAFFFFFE
 
+# SKIP_ATF + OPMODE=aarch32 (--stage2): two words BL1 hands u-boot's entry
+# to stage2 through, right below stage2 (STAGE2_HANDOFF_ADDR in
+# src/cfgBootDefine.h).
+STAGE2_HANDOFF_SIZE = 0x10
+# Everything stage2 owns (code+data+bss) must end below here: above it
+# are AArch32 BL1's stack while it still runs from SRAM, then stage2's
+# own per-CPU stacks (startup_aarch64.S, CPU0's grows down from
+# 0xFFFFE400).
+STAGE2_LIMIT = 0xFFFFD000
+
 
 def arm_branch(from_addr, to_addr):
     """Encode an ARM `B` instruction at from_addr targeting to_addr."""
@@ -135,7 +145,20 @@ def main():
                          "(default: %(default)s). aarch32 replaces the reference "
                          "header's AArch64-switch vector stub with a plain branch "
                          "to the compiled code - see patch_vector_for_aarch32()")
+    p.add_argument("--stage2",
+                    help="SKIP_ATF + OPMODE=aarch32: AArch64 stage2 binary to "
+                         "append, so BootROM loads it into SRAM along with BL1")
+    p.add_argument("--stage2-addr", type=lambda v: int(v, 0),
+                    help="stage2's link address (its Startup symbol)")
+    p.add_argument("--stage2-end", type=lambda v: int(v, 0),
+                    help="stage2's __bss_end__, checked against STAGE2_LIMIT")
+    p.add_argument("--bl1-end", type=lambda v: int(v, 0),
+                    help="BL1's own __bss_end__, checked against the handoff "
+                         "words below stage2")
     args = p.parse_args()
+    if args.stage2 and None in (args.stage2_addr, args.stage2_end, args.bl1_end):
+        sys.exit("error: --stage2 needs --stage2-addr, --stage2-end and --bl1-end")
+
     header_from = args.header_from or NSIH_TEXT_BY_PORT[args.port]
     header = parse_nsih_txt(header_from)
 
@@ -147,6 +170,21 @@ def main():
         code = f.read()
 
     load_addr = int.from_bytes(header[LOADADDR_OFFSET:LOADADDR_OFFSET + 4], "little")
+
+    if args.stage2:
+        handoff = args.stage2_addr - STAGE2_HANDOFF_SIZE
+        if args.bl1_end > handoff:
+            sys.exit(f"error: BL1 ends at 0x{args.bl1_end:x}, past the stage2 "
+                      f"handoff words at 0x{handoff:x}")
+        if args.stage2_end > STAGE2_LIMIT:
+            sys.exit(f"error: stage2 ends at 0x{args.stage2_end:x}, past "
+                      f"0x{STAGE2_LIMIT:x} (stack area)")
+        with open(args.stage2, "rb") as f:
+            stage2 = f.read()
+        offset = args.stage2_addr - (load_addr + CODE_OFFSET)
+        code = code.ljust(offset, b"\0") + stage2
+        print(f"stage2 {args.stage2} ({len(stage2)} bytes) appended at "
+              f"0x{args.stage2_addr:x}, ends 0x{args.stage2_end:x} with .bss")
 
     loadsize = NSIH_SIZE + len(code)
     header[LOADSIZE_OFFSET:LOADSIZE_OFFSET + 4] = loadsize.to_bytes(4, "little")
