@@ -109,6 +109,7 @@ void SubCPUBoot(U32 CPUID)
 #ifdef aarch64
 	SwitchToEL2();
 #endif
+	printf("CPU%d parked, waiting\r\n", CPUID);
 	do {
 		register void (*pLaunch)(void);
 		__asm__ __volatile__("wfi");
@@ -119,8 +120,11 @@ void SubCPUBoot(U32 CPUID)
 		//        __asm__ __volatile__ ("wfe");
 		pLaunch = (void (*)(void))((MPTRS)pCPUStartInfo->JumpAddr);
 		if ((MPTRS)pLaunch != (MPTRS)0xFFFFFFFF) {
-			if (CPUID == pCPUStartInfo->CPUID)
+			if (CPUID == pCPUStartInfo->CPUID) {
+				printf("CPU%d woken, jumping to 0x%x\r\n",
+				       CPUID, (unsigned)pCPUStartInfo->JumpAddr);
 				pLaunch();
+			}
 		}
 	} while (1);
 }

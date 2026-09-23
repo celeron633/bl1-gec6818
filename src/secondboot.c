@@ -61,6 +61,7 @@ extern void SetSecureState(void);
 extern int memtester_main(unsigned int start, unsigned int end);
 
 extern int CRC_Check(void* buf, unsigned int size, unsigned int ref_crc);
+extern U32 GetCurrentSMode(void);
 
 void simple_memtest(U32 *pStart, U32 *pEnd);
 
@@ -199,6 +200,8 @@ void BootMain(U32 CPUID)
 	//--------------------------------------------------------------------------
 	DebugInit(debugCH);
 
+	printf("\r\n\r\n===== BL1 BootMain: CPU%d, debugCH=%d =====\r\n", CPUID, debugCH);
+
 	WriteIO32(&pReg_Alive->ALIVEPWRGATEREG, 1);
 	WriteIO32(&pReg_Alive->VDDCTRLSETREG, 0x000003FC); //; Retention off (Pad hold off)
 
@@ -227,6 +230,11 @@ void BootMain(U32 CPUID)
 	if ((ATF_SUSPEND_SIGNATURE == (signature & 0xFFFFFF00)) && ReadIO32(&pReg_Alive->WAKEUPSTATUS)) {
 		isResume = 1;
 	}
+
+	printf("isResume=%d (ALIVESCRATCHREADREG=0x%08X, ALIVESCRATCHVALUE4=0x%08X, WAKEUPSTATUS=0x%08X)\r\n",
+	       isResume, (unsigned)ReadIO32(&pReg_Alive->ALIVESCRATCHREADREG),
+	       (unsigned)ReadIO32(&pReg_Alive->ALIVESCRATCHVALUE4),
+	       (unsigned)ReadIO32(&pReg_Alive->WAKEUPSTATUS));
 
 	/*
 	 * SD/MMC,SPI - port number stored for u-boot.
@@ -268,6 +276,18 @@ void BootMain(U32 CPUID)
 #endif
 
 	//--------------------------------------------------------------------------
+	// boot mode banner - which chain this binary was built for, and what
+	// EL/CPU we're actually running on right now (for serial log triage)
+	//--------------------------------------------------------------------------
+#if defined(SKIP_ATF)
+	printf("boot mode: SKIP_ATF (direct to u-boot, no fip-loader/fip-secure)\r\n");
+#else
+	printf("boot mode: ATF (fip-loader.img -> fip-secure.img -> fip-nonsecure.img)\r\n");
+#endif
+	printf("CPU%d, EL%d, MULTICORE_BRING_UP=%d\r\n",
+	       CPUID, GetCurrentSMode(), MULTICORE_BRING_UP);
+
+	//--------------------------------------------------------------------------
 	// print clock information
 	//--------------------------------------------------------------------------
 	printClkInfo();
@@ -304,12 +324,16 @@ void BootMain(U32 CPUID)
 	initCCI400();
 #endif
 
+	SYSMSG("SetSecureState (TZPC/TZASC/GIC)...\r\n");
 	SetSecureState();
+	SYSMSG("SetSecureState done\r\n");
 
 	SYSMSG("Wakeup CPU ");
 
 #if (MULTICORE_BRING_UP == 1)
 	SubCPUBringUp(CPUID);
+#else
+	SYSMSG("(MULTICORE_BRING_UP=0, secondary cores left as-is)\r\n");
 #endif
 
 	if (isResume) {
@@ -325,6 +349,9 @@ void BootMain(U32 CPUID)
 #ifdef SIMPLE_MEMTEST
 	simple_memtest((U32 *)0x40000000UL, (U32 *)0xBFFF0000);
 #endif
+
+	printf("LoadDevice=%d (0:USB 1:SPI 2:NAND 3:SDMMC 4:SDFS 5:UART)\r\n",
+	       pSBI->DBI.SPIBI.LoadDevice);
 
 	switch (pSBI->DBI.SPIBI.LoadDevice) {
 #if defined(SUPPORT_USB_BOOT)
@@ -368,7 +395,14 @@ void BootMain(U32 CPUID)
 		Result = iUARTBOOT(pTBI);       // for UART boot
 		break;
 #endif
+	default:
+		printf("LoadDevice=%d has no boot method compiled in - check "
+		       "config.mak SUPPORT_*_BOOT and the NSIH boot-from field\r\n",
+		       pSBI->DBI.SPIBI.LoadDevice);
+		break;
 	}
+
+	printf("boot device load result: %s\r\n", Result ? "OK" : "FAILED");
 
 #ifdef CRC_CHECK_ON
 	Result = CRC_Check((void*)pTBI->LOADADDR, (unsigned int)pTBI->LOADSIZE
@@ -378,7 +412,8 @@ void BootMain(U32 CPUID)
 		void (*pLaunch)(U32, U32) =
 		    (void (*)(U32, U32))((MPTRS)pTBI->LAUNCHADDR);
 		SYSMSG(" Image Loading Done!\r\n");
-		SYSMSG("Launch to 0x%08X\r\n", (MPTRS)pLaunch);
+		SYSMSG("Launch to 0x%08X, currently EL%d\r\n",
+		       (MPTRS)pLaunch, GetCurrentSMode());
 		temp = 0x10000000;
 		while (!DebugIsUartTxDone() && temp--);
 		pLaunch(0, 4330);

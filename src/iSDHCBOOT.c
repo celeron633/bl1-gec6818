@@ -1095,6 +1095,8 @@ static	CBOOL	SDMMCBOOT(SDXCBOOTSTATUS * pSDXCBootStatus,
 				pTBI->SIGNATURE);
 		return CFALSE;
 	}
+	printf("3rd stage header read OK @DEVICEADDR=0x%08X (signature valid)\r\n",
+			(uint32_t)pSBI->DEVICEADDR);
 
 	do {
 		U32 i;
@@ -1119,7 +1121,7 @@ static	CBOOL	SDMMCBOOT(SDXCBOOTSTATUS * pSDXCBootStatus,
 	ptbh = (struct nx_bootheader *)ptbh->tbbi.loadaddr;
 
 	ptbh->tbbi.loadsize += sizeof(struct nx_bootheader);
-	dev_msg("Load Addr :0x%08X,  Load Size :0x%08X,  Launch Addr :0x%08X\r\n",
+	printf("3rd stage: Load Addr :0x%08X,  Load Size :0x%08X,  Launch Addr :0x%08X\r\n",
 			(uint32_t)ptbh->tbbi.loadaddr,
 			(uint32_t)ptbh->tbbi.loadsize,
 			(uint32_t)ptbh->tbbi.startaddr);

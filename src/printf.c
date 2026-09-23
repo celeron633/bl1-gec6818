@@ -146,6 +146,59 @@ static int printi(char **out, int i, int b, int sg, int width, int pad,
 	return pc + prints(out, s, width, pad);
 }
 
+#ifdef aarch64
+/*
+ * 64-bit counterpart of printi(), for the "l" length modifier (%lx, %ld,
+ * %lu - see print()). Only built for aarch64: it uses plain '/' and '%'
+ * on "long", which need hardware 64-bit divide (available on aarch64,
+ * not on aarch32 without linking libgcc's __aeabi_uldivmod, which this
+ * -nostdlib build doesn't). aarch32 builds keep silently mis-parsing an
+ * "l" modifier, same as before this was added.
+ */
+static int printl(char **out, long i, int b, int sg, int width, int pad,
+		   int letbase)
+{
+	char print_buf[PRINT_BUF_LEN];
+	register char *s;
+	register int t, neg = 0, pc = 0;
+	register unsigned long u = i;
+
+	if (i == 0) {
+		print_buf[0] = '0';
+		print_buf[1] = '\0';
+		return prints(out, print_buf, width, pad);
+	}
+
+	if (sg && b == 10 && i < 0) {
+		neg = 1;
+		u = -i;
+	}
+
+	s = print_buf + PRINT_BUF_LEN - 1;
+	*s = '\0';
+
+	while (u) {
+		t = u % b;
+		if (t >= 10)
+			t += letbase - '0' - 10;
+		*--s = t + '0';
+		u = u / b;
+	}
+
+	if (neg) {
+		if (width && (pad & PAD_ZERO)) {
+			printchar(out, '-');
+			++pc;
+			--width;
+		} else {
+			*--s = '-';
+		}
+	}
+
+	return pc + prints(out, s, width, pad);
+}
+#endif
+
 static int print(char **out, const char *format, va_list args)
 {
 	register int width, pad;
@@ -172,6 +225,37 @@ static int print(char **out, const char *format, va_list args)
 				width *= 10;
 				width += *format - '0';
 			}
+#ifdef aarch64
+			{
+				int lflag = 0;
+				while (*format == 'l') {
+					++format;
+					lflag = 1;
+				}
+				if (lflag) {
+					if (*format == 'd') {
+						pc += printl(out, va_arg(args, long), 10,
+							     1, width, pad, 'a');
+						continue;
+					}
+					if (*format == 'x') {
+						pc += printl(out, va_arg(args, long), 16,
+							     0, width, pad, 'a');
+						continue;
+					}
+					if (*format == 'X') {
+						pc += printl(out, va_arg(args, long), 16,
+							     0, width, pad, 'A');
+						continue;
+					}
+					if (*format == 'u') {
+						pc += printl(out, va_arg(args, long), 10,
+							     0, width, pad, 'a');
+						continue;
+					}
+				}
+			}
+#endif
 			if (*format == 's') {
 				register char *s = va_arg(args, char *);
 				pc += prints(out, s ? s : "(null)", width, pad);
