@@ -1098,14 +1098,29 @@ static	CBOOL	SDMMCBOOT(SDXCBOOTSTATUS * pSDXCBootStatus,
 	printf("3rd stage header read OK @DEVICEADDR=0x%08X (signature valid)\r\n",
 			(uint32_t)pSBI->DEVICEADDR);
 
+	/*
+	 * The image lands at [loadaddr, loadaddr + 0x400 + loadsize): header
+	 * first, payload at +0x400. That must stay clear of SRAM, where this
+	 * code, its stack and (SKIP_ATF) the AArch64 stage2 all live -
+	 * otherwise the read below overwrites the very code doing it.
+	 */
+	if (ptbh->tbbi.loadaddr + sizeof(struct nx_bootheader) +
+			ptbh->tbbi.loadsize > BASEADDR_SRAM &&
+	    ptbh->tbbi.loadaddr < (U64)BASEADDR_SRAM + INTERNAL_SRAM_SIZE) {
+		printf("3rd stage LoadAddr 0x%08X + 0x%08X overlaps SRAM, refusing\r\n",
+		       (U32)ptbh->tbbi.loadaddr, ptbh->tbbi.loadsize);
+		return CFALSE;
+	}
+
 	do {
 		U32 i;
 		U32 *src = (U32*)pTBI;
-		U32 *tb_load = (U32*)ptbh->tbbi.loadaddr;
+		U32 *tb_load = (U32*)(MPTRS)ptbh->tbbi.loadaddr;
 		U32 *dst = tb_load;
 
-		/* copy full struct nx_bootheader */
-		for (i = 0; i< sizeof(struct nx_bootheader)/sizeof(U32); i++)
+		/* copy the header sector read above; the rest of struct
+		 * nx_bootheader comes in with the payload read below */
+		for (i = 0; i < BLOCK_LENGTH / sizeof(U32); i++)
 			*dst++ = *src++;
 
 #ifdef SECURE_ON
@@ -1118,7 +1133,7 @@ static	CBOOL	SDMMCBOOT(SDXCBOOTSTATUS * pSDXCBootStatus,
 			*dst++ = *src++;
 #endif
 	} while(0);
-	ptbh = (struct nx_bootheader *)ptbh->tbbi.loadaddr;
+	ptbh = (struct nx_bootheader *)(MPTRS)ptbh->tbbi.loadaddr;
 
 	ptbh->tbbi.loadsize += sizeof(struct nx_bootheader);
 	printf("3rd stage: Load Addr :0x%08X,  Load Size :0x%08X,  Launch Addr :0x%08X\r\n",
@@ -1131,21 +1146,21 @@ static	CBOOL	SDMMCBOOT(SDXCBOOTSTATUS * pSDXCBootStatus,
 			pSBI->DEVICEADDR / BLOCK_LENGTH + 1,
 			(ptbh->tbbi.loadsize + BLOCK_LENGTH - 1) / BLOCK_LENGTH,
 			(U32 *)((MPTRS)(ptbh->tbbi.loadaddr + BLOCK_LENGTH)));
-	pTBI->LAUNCHADDR = ptbh->tbbi.startaddr;	/* for old style boot */
+	pTBI->LAUNCHADDR = (U32)ptbh->tbbi.startaddr;	/* for old style boot */
 
 #if defined(VERBOSE)
 	printf("dump loadaddr begin!\r\n");
-	DumpHex((void*)ptbh->tbbi.loadaddr, 1024);
+	DumpHex((void*)(MPTRS)ptbh->tbbi.loadaddr, 1024);
 	printf("dump loadaddr end!\r\n");
 
 	printf("dump startaddr begin!\r\n");
-	DumpHex((void*)ptbh->tbbi.startaddr, 1024);
+	DumpHex((void*)(MPTRS)ptbh->tbbi.startaddr, 1024);
 	printf("dump startaddr begin!\r\n");
 #endif
 
 	if (pReg_ClkPwr->SYSRSTCONFIG & 1<<14)
-		Decrypt((U32 *)(ptbh->tbbi.loadaddr + sizeof(struct nx_bootheader)),
-			(U32 *)(ptbh->tbbi.loadaddr + sizeof(struct nx_bootheader)),
+		Decrypt((U32 *)(MPTRS)(ptbh->tbbi.loadaddr + sizeof(struct nx_bootheader)),
+			(U32 *)(MPTRS)(ptbh->tbbi.loadaddr + sizeof(struct nx_bootheader)),
 			ptbh->tbbi.loadsize);
 	if (result == CFALSE) {
 		printf("Image Read Failure\r\n");

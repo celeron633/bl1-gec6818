@@ -194,20 +194,20 @@ struct nx_ddrphy_drvdsinfo {
 struct nx_tbbinfo {
 	uint32_t vector[8];			/* 0x000 ~ 0x01c */
 	uint32_t vector_rel[8];			/* 0x020 ~ 0x03c */
-#if 1
-	uint32_t devreadaddr;
-    uint32_t loadsize;
-    uint32_t loadaddr;
-    uint32_t startaddr;
-    uint32_t _reserved0[6];
-#else
+	/*
+	 * 0x040~0x04C is where BootROM reads DEVICEADDR/LOADSIZE/LOADADDR/
+	 * LAUNCHADDR from BL1's *own* header (struct NX_SecondBootInfo).
+	 * 3rd-stage images (fip-loader.img, u-boot-direct.img - anything
+	 * SECURE_BINGEN -t 3rdboot produces) use the fields below instead;
+	 * whatever sits at 0x040~0x04C in them is leftover NSIH-template
+	 * text and must not be trusted.
+	 */
 	uint32_t _reserved0[4];			/* 0x040 ~ 0x04C */
 
 	uint32_t loadsize;			/* 0x050 */
 	uint32_t crc32;				/* 0x054 */
 	uint64_t loadaddr;			/* 0x058 ~ 0x05c */
 	uint64_t startaddr;			/* 0x060 ~ 0x064 */
-#endif
 
 	uint32_t _reserved1[2];			/* 0x068 ~ 0x06c */
 
