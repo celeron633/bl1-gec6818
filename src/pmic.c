@@ -35,6 +35,15 @@ void DMC_Delay(int milisecond);
 #define AXP_I2C_GPIO_GRP (-1)
 #define NXE2000_I2C_GPIO_GRP (-1)
 
+#ifdef GEC6818_PMIC_INIT
+#undef AXP_I2C_GPIO_GRP
+#define AXP_I2C_GPIO_GRP 		2  // C group, PMIC_SCL/PMIC_SDA
+#define AXP_I2C_SCL 			15
+#define AXP_I2C_SDA 			16
+#define AXP_I2C_SCL_ALT			1  // GPIOC15/16: ALT1 is GPIO
+#define AXP_I2C_SDA_ALT			1
+#endif
+
 #ifdef DRONE_PMIC_INIT
 #undef AXP_I2C_GPIO_GRP
 #define AXP_I2C_GPIO_GRP 		3  // D group
@@ -222,7 +231,7 @@ int getASVIndex(U32 ecid_1)
 }
 #endif // #if (AUTO_VOLTAGE_CONTROL == 1)
 
-#if (AXP_I2C_GPIO_GRP > -1)
+#if (AXP_I2C_GPIO_GRP > -1) && !defined(GEC6818_PMIC_INIT)
 static U8 axp228_get_dcdc_step(int want_vol, int step, int min, int max)
 {
 	U32 vol_step = 0;
@@ -273,6 +282,49 @@ static U8 nxe2000_get_dcdc_step(int want_vol)
 	return (U8)(vol_step & 0xFF);
 }
 #endif
+
+#ifdef GEC6818_PMIC_INIT
+/*
+ * GEC6818 core board (core.pdf, 6818 option: R42 NC, R45/R49 0R):
+ * DCDC2 and DCDC3 both drive VCC1P1_ARM through R49, and VCC1P0_CORE
+ * comes from a separate fixed DC-DC. The two AXP bucks must run as one
+ * poly-phase converter, or they fight each other once the kernel's
+ * cpufreq moves DCDC2 alone. ARM voltage stays at the OTP default;
+ * BL1 only runs the CPU at 800MHz.
+ */
+static void PMIC_GEC6818(void)
+{
+	U8 mode, freq, dc2, dc3;
+
+	I2C_Init(AXP_I2C_GPIO_GRP, AXP_I2C_SCL, AXP_I2C_SDA,
+			AXP_I2C_SCL_ALT, AXP_I2C_SDA_ALT);
+
+	if (!I2C_Read(I2C_ADDR_AXP228, AXP228_REG_DCMODE, &mode, 1) ||
+	    !I2C_Read(I2C_ADDR_AXP228, AXP228_REG_DCFREQ, &freq, 1) ||
+	    !I2C_Read(I2C_ADDR_AXP228, AXP228_REG_DC2VOL, &dc2, 1) ||
+	    !I2C_Read(I2C_ADDR_AXP228, AXP228_REG_DC3VOL, &dc3, 1)) {
+		printf("PMIC: AXP228 not responding, left at OTP defaults\r\n");
+		return;
+	}
+	SYSMSG("PMIC: AXP228 mode=%02x freq=%02x dcdc2=%dmV dcdc3=%dmV\r\n",
+		mode, freq, 600 + (dc2 & 0x3F) * 20, 600 + (dc3 & 0x7F) * 20);
+
+	// same setpoint on both phases before bridging them
+	dc3 = dc2 & 0x3F;
+	I2C_Write(I2C_ADDR_AXP228, AXP228_REG_DC3VOL, &dc3, 1);
+
+	freq |= AXP228_DCDC23_POLYPHASE;
+	I2C_Write(I2C_ADDR_AXP228, AXP228_REG_DCFREQ, &freq, 1);
+
+	// DCDC4 (VCC1P5_SYS) and DCDC5 (VCC1P5_DDR) in PWM mode
+	mode |= DCDC_SYS | DCDC_DDR;
+	I2C_Write(I2C_ADDR_AXP228, AXP228_REG_DCMODE, &mode, 1);
+
+	if (I2C_Read(I2C_ADDR_AXP228, AXP228_REG_DCFREQ, &freq, 1) &&
+	    I2C_Read(I2C_ADDR_AXP228, AXP228_REG_DCMODE, &mode, 1))
+		SYSMSG("PMIC: -> mode=%02x freq=%02x\r\n", mode, freq);
+}
+#endif // GEC6818
 
 #ifdef DRONE_PMIC_INIT
 inline void PMIC_Drone(void)
@@ -577,6 +629,10 @@ void PMIC_RAPTOR(void)
 
 void initPMIC(void)
 {
+#ifdef GEC6818_PMIC_INIT
+	PMIC_GEC6818();
+#endif // GEC6818
+
 #ifdef DRONE_PMIC_INIT
 	PMIC_Drone();
 #endif // DRONE

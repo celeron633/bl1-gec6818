@@ -50,6 +50,11 @@
 #define AXP228_REG_DC4VOL 0x24
 #define AXP228_REG_DC5VOL 0x25
 
+#define AXP228_REG_DCFREQ 0x37
+#define AXP228_REG_DCMODE 0x80
+
+#define AXP228_DCDC23_POLYPHASE (1 << 4) // "bridge DCDC2 and DCDC3"
+
 #define DCDC_SYS (1 << 3) // VCC1P5_SYS
 #define DCDC_DDR (1 << 4) // VCC1P5_DDR
 

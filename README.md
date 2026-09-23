@@ -216,7 +216,7 @@ Key files:
 | `src/startup_aarch64.S` | entry point (BootROM jumps here), EL3 exception vectors |
 | `src/secondboot.c` | `BootMain()` - clock/DDR/secure-state init, loads and launches the next stage |
 | `src/psci.c` | minimal PSCI implementation, only used in `SKIP_ATF` mode |
-| `src/pmic.c` | PMIC control (ARM/DDR voltage) |
+| `src/pmic.c` | PMIC setup (`INITPMIC=YES`): on GEC6818, AXP228 over GPIOC15/16 - bridge DCDC2/3 (both feed VCC1P1_ARM), DCDC4/5 in PWM mode |
 | `src/init_DDR3.c` / `src/init_LPDDR3.c` | DRAM init |
 | `config.mak` | build config: `OPMODE`, `BOARD`, `SKIP_ATF`, toolchain prefix; reads `.config.mak` first |
 | `tools/menuconfig.py` | `make menuconfig`: terminal UI that writes `.config.mak` |
@@ -412,7 +412,7 @@ SD 卡在 u-boot 里是 `mmc 1`；`mmc 0`（eMMC）没接东西，所以 autoboo
 | `src/startup_aarch64.S` | 入口点（BootROM 跳到这）、EL3 异常向量表 |
 | `src/secondboot.c` | `BootMain()`——时钟/DDR/安全态初始化，加载并跳转到下一级 |
 | `src/psci.c` | 最小化 PSCI 实现，只在 `SKIP_ATF` 模式下用 |
-| `src/pmic.c` | PMIC 控制（ARM/DDR 电压） |
+| `src/pmic.c` | PMIC 初始化（`INITPMIC=YES`）：GEC6818 上经 GPIOC15/16 配置 AXP228——DCDC2/3 桥接（两路都接 VCC1P1_ARM），DCDC4/5 强制 PWM |
 | `src/init_DDR3.c` / `src/init_LPDDR3.c` | DRAM 初始化 |
 | `config.mak` | 编译配置：`OPMODE`、`BOARD`、`SKIP_ATF`、工具链前缀；先读 `.config.mak` |
 | `tools/menuconfig.py` | `make menuconfig`：终端菜单，写 `.config.mak` |

@@ -54,6 +54,10 @@ OPTIONS = [
      "OPMODE=aarch64, or the stage2 (STAGE2_CROSS_TOOL) when OPMODE=aarch32 "
      "boots an AArch64 u-boot. Left/Right cycles through aarch64*-gcc "
      "toolchains found on PATH."),
+    ("INITPMIC", "choice", "YES", ["YES", "NO"],
+     "Set up the AXP228 over GPIOC15/16 before the PLL change: bridge "
+     "DCDC2/DCDC3 (both feed VCC1P1_ARM) and put DCDC4/DCDC5 in PWM mode "
+     "(src/pmic.c, PMIC_GEC6818)."),
     ("SYSLOG", "choice", "y", ["y", "n"],
      "Serial log messages from BL1 (-DSYSLOG_ON)."),
     ("BOOT_LOGO", "choice", "y", ["y", "n"],

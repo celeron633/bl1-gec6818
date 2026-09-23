@@ -75,6 +75,7 @@ DREX, DDRPHY = 0xC00E0000, 0xC00E1000
 CCI400 = 0xE0090000
 TIMER = 0xC0017000
 GMAC = 0xC0060000
+GPIOC = 0xC001C000
 GICD = 0xC0009000
 TZPC0 = 0xC0301000          # R0SIZE @0x000: secure part of the SRAM
 MLC0 = 0xC0102000
@@ -422,6 +423,123 @@ class Timer:
 
 
 # --------------------------------------------------------------------------
+# GPIO bank with an I2C slave bit-banged on two of its pins: GEC6818's
+# AXP228 PMIC on GPIOC15 (SCL) / GPIOC16 (SDA). Lines are open drain with
+# pull-ups: a pin is low when the SoC drives it (OUTENB set, OUT clear) or
+# the slave pulls SDA low. Pins not muxed to GPIO (ALT1 on GPIOC) read 0.
+
+class AXP228:
+    ADDR = 0x34
+
+    def __init__(self):
+        # power-on values are made up, not read from a board
+        self.regs = {0x03: 0x06,            # chip ID
+                     0x22: 0x19, 0x23: 0x14,  # DCDC2 1.1V, DCDC3 1.0V
+                     0x37: 0x08, 0x80: 0x80}
+        self.state, self.low = "idle", False
+
+    def start(self):
+        self.state, self.phase, self.bits, self.byte = "recv", "data", 0, 0
+        self.first, self.low = True, False
+
+    def stop(self):
+        self.state, self.low = "idle", False
+
+    def rise(self, sda):
+        if self.state == "recv" and self.phase == "data":
+            self.byte, self.bits = (self.byte << 1) | sda, self.bits + 1
+        elif self.state == "send" and self.phase == "ack":
+            self.nack = sda
+
+    def fall(self):
+        if self.state == "recv" and self.phase == "data" and self.bits == 8:
+            if self.first:
+                self.rw, self.need_reg = self.byte & 1, not self.byte & 1
+                ok = self.byte >> 1 == self.ADDR
+            elif self.need_reg:
+                self.reg, self.need_reg, ok = self.byte, False, True
+            else:
+                log(f"AXP228 write reg 0x{self.reg:02x} = 0x{self.byte:02x}")
+                self.regs[self.reg], ok = self.byte, True
+                self.reg = (self.reg + 1) & 0xFF
+            if ok:
+                self.phase, self.low = "ack", True
+            else:
+                self.stop()
+        elif self.state == "recv" and self.phase == "ack":
+            self.low = False
+            if self.first and self.rw:
+                self.state = "send"
+                self.load()
+            else:
+                self.phase, self.bits, self.byte = "data", 0, 0
+            self.first = False
+        elif self.state == "send" and self.phase == "data":
+            self.bits += 1
+            if self.bits == 8:
+                self.phase, self.low = "ack", False
+            else:
+                self.low = not (self.byte >> (7 - self.bits)) & 1
+        elif self.state == "send" and self.phase == "ack":
+            if self.nack:
+                self.stop()
+            else:
+                self.reg = (self.reg + 1) & 0xFF
+                self.load()
+
+    def load(self):
+        self.byte = self.regs.get(self.reg, 0)
+        log(f"AXP228 read reg 0x{self.reg:02x} = 0x{self.byte:02x}")
+        self.phase, self.bits = "data", 0
+        self.low = not self.byte >> 7
+
+
+class I2CGPIO:
+    OUT, OUTENB, PAD, ALTFN0 = 0x00, 0x04, 0x18, 0x20
+
+    def __init__(self, scl, sda, gpio_alt, slave):
+        self.scl, self.sda, self.alt, self.slave = scl, sda, gpio_alt, slave
+        self.regs = {}
+        self.prev = (1, 1)
+
+    def muxed(self, pin):
+        altfn = self.regs.get(self.ALTFN0 + (pin >> 4) * 4, 0)
+        return (altfn >> ((pin & 0xF) * 2)) & 3 == self.alt
+
+    def lines(self):
+        driven = self.regs.get(self.OUTENB, 0) & ~self.regs.get(self.OUT, 0)
+        pad = ~driven & 0xFFFFFFFF
+        if self.slave.low:
+            pad &= ~(1 << self.sda)
+        for pin in (self.scl, self.sda):
+            if not self.muxed(pin):
+                pad &= ~(1 << pin)
+        return pad
+
+    def update(self):
+        pad = self.lines()
+        scl, sda = (pad >> self.scl) & 1, (pad >> self.sda) & 1
+        pscl, psda = self.prev
+        if scl and pscl and sda != psda:
+            (self.slave.stop if sda else self.slave.start)()
+        elif scl and not pscl:
+            self.slave.rise(sda)
+        elif pscl and not scl:
+            self.slave.fall()
+        self.prev = (scl, (self.lines() >> self.sda) & 1)
+
+    def read(self, off, size):
+        if off == self.PAD:
+            return self.lines()
+        return self.regs.get(off, 0)
+
+    def write(self, off, size, val):
+        self.regs[off] = val
+        if off in (self.OUT, self.OUTENB) or off >> 3 == self.ALTFN0 >> 3:
+            self.update()
+
+
+# --------------------------------------------------------------------------
 # Board
 
 class Board:
@@ -447,6 +565,7 @@ class Board:
                     for i, b in enumerate(SDMMC_BASES)}
         self.uarts = {b: UART(i, self) for i, b in enumerate(UART_BASES)}
         self.timer = Timer()
+        self.gpioc = I2CGPIO(15, 16, 1, AXP228())
         self.regs[CLKPWR + SYSRSTCONFIG] = 5    # boot mode pins: SDMMC
         self.regs[DDRPHY + 0x04C] = 0x492       # SHIFTC_CON reset value
         self.regs[DDRPHY + 0x3AC] = 0x00000001  # VERSION_INFO
@@ -493,6 +612,8 @@ class Board:
             return self.mmc[page]
         if page == TIMER:
             return self.timer
+        if page == GPIOC:
+            return self.gpioc
         return None
 
     def mmio_read(self, uc, offset, size, base):

@@ -21,8 +21,11 @@
 
 #define I2C_GPIO_DEBUG 0
 
+#if (I2C_GPIO_DEBUG == 1)
 #define dprintf printf
-//#define dprintf(x)
+#else
+#define dprintf(...)
+#endif
 
 #define STRETCHING_TIMEOUT 100
 #define I2C_DELAY_TIME 2
@@ -262,8 +265,7 @@ static CBOOL I2C_ReadBit(CBOOL *Bit)
 
 	I2CDELAY(I2C_DELAY_TIME);
 
-	while (SCL_READ() == CFALSE)
-		; // clock stretching.... need timeout code
+	while (SCL_READ() == CFALSE) // clock stretching
 	{
 		if (timeout-- == 0) {
 			dprintf("I2C_ReadBit CLK Timeout Arbitration Fail\r\n");
