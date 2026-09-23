@@ -39,9 +39,9 @@ ARM Trusted Firmware is used:
 | `aarch64` | `y` | BL1 → u-boot → Linux | BL1 itself, resident at EL3 (`src/psci.c`) | BootROM, via the NSIH header's vector, before BL1 runs | `u-boot-direct.img` |
 | `aarch64` | `n` | not usable: BL1 would jump into `fip-loader.img`'s AArch32 entry in AArch64 | | | |
 
-The two `SKIP_ATF=y` configurations are not yet verified on hardware -
-see [docs/BOOT_MODES.md](docs/BOOT_MODES.md). `config.mak` defaults to
-`OPMODE=aarch64`, `SKIP_ATF=n` (the unusable one), so always pass both.
+The default (`config.mak`) is `OPMODE=aarch64 SKIP_ATF=y`. The two
+`SKIP_ATF=y` configurations are not yet verified on hardware - see
+[docs/BOOT_MODES.md](docs/BOOT_MODES.md).
 
 ### Building
 
@@ -60,17 +60,17 @@ export PATH=~/arm-gnu-toolchain-13.2.rel1-x86_64-aarch64-none-elf/bin:$PATH
 track CFLAGS changes):
 
 ```sh
-make clean && make OPMODE=aarch32 CROSS_TOOL=arm-linux-gnueabi-              # ATF chain
-make clean && make OPMODE=aarch32 SKIP_ATF=y CROSS_TOOL=arm-linux-gnueabi-   # no ATF, via stage2
-make clean && make OPMODE=aarch64 SKIP_ATF=y                                  # no ATF, AArch64 BL1
+make clean && make                                                           # default: no ATF, AArch64 BL1
+make clean && make OPMODE=aarch32 CROSS_TOOL=arm-linux-gnueabi-              # no ATF, via stage2
+make clean && make OPMODE=aarch32 SKIP_ATF=n CROSS_TOOL=arm-linux-gnueabi-   # ATF chain
 ```
 
 Add `BOOT_PORT=emmc` to boot from eMMC instead of SD. The no-ATF
 configurations need u-boot's `u-boot-direct.img` (`make u-boot-direct.img`
 in u-boot_gec6818), not `fip-nonsecure.img`.
 
-GitHub Actions builds both modes (plus the matching u-boot images) on every
-push and uploads them as a workflow artifact - see the badge above, or
+GitHub Actions builds the default configuration (plus `u-boot-direct.img`)
+on every push and uploads them as a workflow artifact - see the badge above, or
 `.github/workflows/build.yml`.
 
 ### Flashing
@@ -140,8 +140,8 @@ SD/eMMC 再读一个镜像并跳过去——要么走正常的 ARM Trusted Firmw
 | `aarch64` | `y` | BL1 → u-boot → Linux | BL1 自己，常驻 EL3（`src/psci.c`） | BootROM 执行 NSIH 头里的向量，BL1 运行之前就已切换 | `u-boot-direct.img` |
 | `aarch64` | `n` | 不可用：BL1 会以 AArch64 跳进 `fip-loader.img` 的 AArch32 入口 | | | |
 
-两种 `SKIP_ATF=y` 配置都还没上板验证，详见 [docs/BOOT_MODES.md](docs/BOOT_MODES.md)。
-`config.mak` 的默认值是 `OPMODE=aarch64`、`SKIP_ATF=n`，正好是不可用的那种，所以编译时两个都要显式指定。
+默认配置（`config.mak`）是 `OPMODE=aarch64 SKIP_ATF=y`。两种 `SKIP_ATF=y` 配置都还没上板验证，
+详见 [docs/BOOT_MODES.md](docs/BOOT_MODES.md)。
 
 ### 编译
 
@@ -159,15 +159,15 @@ export PATH=~/arm-gnu-toolchain-13.2.rel1-x86_64-aarch64-none-elf/bin:$PATH
 切换配置时一定先 `make clean`（Makefile 检测不到 CFLAGS 的变化）：
 
 ```sh
-make clean && make OPMODE=aarch32 CROSS_TOOL=arm-linux-gnueabi-              # ATF 链路
-make clean && make OPMODE=aarch32 SKIP_ATF=y CROSS_TOOL=arm-linux-gnueabi-   # 不走 ATF，经 stage2
-make clean && make OPMODE=aarch64 SKIP_ATF=y                                  # 不走 ATF，AArch64 BL1
+make clean && make                                                           # 默认：不走 ATF，AArch64 BL1
+make clean && make OPMODE=aarch32 CROSS_TOOL=arm-linux-gnueabi-              # 不走 ATF，经 stage2
+make clean && make OPMODE=aarch32 SKIP_ATF=n CROSS_TOOL=arm-linux-gnueabi-   # ATF 链路
 ```
 
 加 `BOOT_PORT=emmc` 改为从 eMMC 启动。不走 ATF 的两种配置要配 u-boot 的
 `u-boot-direct.img`（在 u-boot_gec6818 里 `make u-boot-direct.img`），不是 `fip-nonsecure.img`。
 
-每次 push，GitHub Actions 会把两种模式（以及配套的 u-boot 镜像）都编译好，打包成
+每次 push，GitHub Actions 会编译默认配置（以及配套的 `u-boot-direct.img`），打包成
 workflow artifact 上传——看上面的徽章，或者 `.github/workflows/build.yml`。
 
 ### 烧录

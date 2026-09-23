@@ -1,4 +1,4 @@
-# 启动模式：走 ATF（默认） vs. SKIP_ATF（不走 ATF）
+# 启动模式：SKIP_ATF（不走 ATF，默认） vs. 走 ATF
 
 这个 BL1（"2nd bootloader"）是启动链中的一环。BootROM 把它加载进 SRAM；
 它初始化好时钟和 DDR 之后，再从 SD/eMMC 读下一级镜像并跳过去。下一级是
@@ -23,7 +23,7 @@ LoadAddr+0x400，然后跳到 StartAddr。
 `0xFFFF0000`），**不能当真**：按它加载会把正在 SRAM 里运行的 BL1 自己覆盖掉。
 所以 `SDMMCBOOT()` 会拒绝任何和 SRAM 重叠的 LoadAddr 范围。
 
-## 完整链路（默认，`SKIP_ATF=n`）
+## 走 ATF 的完整链路（`SKIP_ATF=n`）
 
 ```
 BootROM -> BL1（本仓库，SRAM）
@@ -64,8 +64,8 @@ SD/eMMC 上的布局（字节偏移，来自 `u-boot_gec6818` 的
 ### 编译
 
 ```
-make clean && make OPMODE=aarch32 CROSS_TOOL=<arm-linux-gnueabi- 前缀>
-make clean && make OPMODE=aarch32 CROSS_TOOL=... BOOT_PORT=emmc   # 改成从 eMMC 启动，见 NSIH.md
+make clean && make OPMODE=aarch32 SKIP_ATF=n CROSS_TOOL=<arm-linux-gnueabi- 前缀>
+make clean && make OPMODE=aarch32 SKIP_ATF=n CROSS_TOOL=... BOOT_PORT=emmc   # 改成从 eMMC 启动，见 NSIH.md
 ```
 
 u-boot 照常编译（`u-boot_gec6818/Makefile` 的 `fip-nonsecure.img` 目标）。
@@ -87,7 +87,7 @@ tools/write_sdcard.py --device /dev/sdX --mode atf \
 
 ## SKIP_ATF：完全不用 ATF/OP-TEE
 
-用 `OPMODE=aarch32 SKIP_ATF=y` 编译 BL1。链路变成：
+用 `OPMODE=aarch32 SKIP_ATF=y` 编译 BL1 时，链路是：
 
 ```
 BootROM (AArch32)
@@ -125,7 +125,7 @@ SGI1 唤醒它。cluster1 的核 MPIDR 是 0x100~0x103（`CONFIG_RESET_AFFINITY_
 
 ```
 cd bl1-gec6818
-make clean && make OPMODE=aarch32 SKIP_ATF=y CROSS_TOOL=<arm-linux-gnueabi- 前缀>
+make clean && make OPMODE=aarch32 CROSS_TOOL=<arm-linux-gnueabi- 前缀>
                                   # 切换模式前一定先 make clean：CFLAGS 不同，
                                   # Makefile 自己检测不到
 cd ../u-boot_gec6818
@@ -137,7 +137,7 @@ make u-boot-direct.img            # 不是 fip-nonsecure.img，原因见下
 `SECURE_BINGEN`，参数为 `-l CONFIG_SYS_TEXT_BASE-0x400 -e CONFIG_SYS_TEXT_BASE`，
 这样 u-boot 正好落在它的链接地址上。
 
-### 另一种做法：`OPMODE=aarch64 SKIP_ATF=y`
+### 默认做法：`OPMODE=aarch64 SKIP_ATF=y`
 
 BootROM 执行 NSIH 头里的向量，直接把核心复位成 AArch64、从 0xFFFF0200 开始跑
 BL1，所以不需要 stage2：BL1 本身常驻 EL3 处理 PSCI（同一份 `src/psci.c`），
@@ -145,7 +145,7 @@ BL1，所以不需要 stage2：BL1 本身常驻 EL3 处理 PSCI（同一份 `src
 （`u-boot-direct.img`）和烧录方式与上面相同，只需一套 `aarch64-none-elf` 工具链：
 
 ```
-make clean && make OPMODE=aarch64 SKIP_ATF=y
+make clean && make          # config.mak 的默认值就是这个配置
 ```
 
 这个配置曾经完全不出串口，原因是 2KB 对齐的异常向量表把 `.text` 连同 `Startup`

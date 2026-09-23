@@ -61,7 +61,8 @@ SECURE_ON			?= 0
 # directly from BL1 to the 3rd-stage image (u-boot). Brings up a minimal
 # PSCI implementation in BL1 itself (see src/psci.c) since no BL31 will
 # ever run. See also MULTICORE_BRING_UP in src/cfgBootDefine.h.
-SKIP_ATF			?= n
+# SKIP_ATF=n (the fip-loader.img chain) needs OPMODE=aarch32.
+SKIP_ATF			?= y
 
 # Which device BL1 (and u-boot after it) boots from: sd or emmc. Picks
 # the reference-nsih/raptor-*-64.txt header tools/mk_bl1_image.py builds
