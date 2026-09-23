@@ -4,7 +4,8 @@ Minimal S5P6818 boot-chain emulator (Unicorn), CPU0 only:
 
     BootROM (HLE) -> NSIH1 vector stub (AArch32) -> TIEOFF + warm reset
     -> BL1 (AArch64 EL3, or AArch32 + AArch64 stage2 for OPMODE=aarch32)
-    -> NSIH2 image (u-boot-direct.img) -> u-boot (AArch64 EL2)
+    -> NSIH2 image (u-boot-direct.img) -> u-boot (AArch64 EL2, or AArch32
+       SVC for a 32-bit u-boot and a BL1 built with UBOOT_ARCH=aarch32)
 
 What is emulated:
   - BootROM is not code here, just what it does: read NSIH1 from SD
@@ -636,10 +637,23 @@ def enter_el3_aarch64(uc):
     uc.cpr_write(3, 0, 1, 0, 0, uc.cpr_read(3, 0, 1, 0, 0))
 
 
+AARCH32_MODES = {0x10: "USR", 0x11: "FIQ", 0x12: "IRQ", 0x13: "SVC",
+                 0x16: "MON", 0x17: "ABT", 0x1A: "HYP", 0x1B: "UND",
+                 0x1F: "SYS"}
+
+
 def current_el(board):
     if board.aarch64:
         return (board.uc.reg_read(A64.UC_ARM64_REG_PSTATE) >> 2) & 3
     return None
+
+
+def cpu_state(board):
+    """"AArch64 EL2", "AArch32 SVC", ..."""
+    if board.aarch64:
+        return f"AArch64 EL{current_el(board)}"
+    mode = board.uc.reg_read(A32.UC_ARM_REG_CPSR) & 0x1F
+    return f"AArch32 {AARCH32_MODES.get(mode, hex(mode))}"
 
 
 def dump_regs(board):
@@ -670,14 +684,20 @@ def dump_regs(board):
                  uc.reg_read(A32.UC_ARM_REG_PC)]
         lines = [" ".join(f"r{i + j:<2}={regs[i + j]:08x}" for j in range(4))
                  for i in range(0, 16, 4)]
-        lines.append(f"cpsr={uc.reg_read(A32.UC_ARM_REG_CPSR):08x}")
+        lines.append(f"cpsr={uc.reg_read(A32.UC_ARM_REG_CPSR):08x} "
+                     f"({cpu_state(board)})")
     for line in lines:
         print("    " + line)
     pc = board.pc()
     try:
-        from capstone import Cs, CS_ARCH_ARM64, CS_ARCH_ARM, CS_MODE_ARM
-        md = Cs(CS_ARCH_ARM64, CS_MODE_ARM) if board.aarch64 else \
-            Cs(CS_ARCH_ARM, CS_MODE_ARM)
+        from capstone import (Cs, CS_ARCH_ARM64, CS_ARCH_ARM, CS_MODE_ARM,
+                              CS_MODE_THUMB)
+        if board.aarch64:
+            md = Cs(CS_ARCH_ARM64, CS_MODE_ARM)
+        elif uc.reg_read(A32.UC_ARM_REG_CPSR) & 0x20:
+            md = Cs(CS_ARCH_ARM, CS_MODE_THUMB)
+        else:
+            md = Cs(CS_ARCH_ARM, CS_MODE_ARM)
         code = bytes(uc.mem_read(pc - 16, 32))
         for insn in md.disasm(code, pc - 16):
             mark = "=>" if insn.address == pc else "  "
@@ -745,8 +765,7 @@ def install_hooks(board, uc, info):
     watch = {}      # address -> one-shot callback
 
     def milestone(msg):
-        el = current_el(board)
-        log(f"{msg}, {'AArch64 EL%d' % el if board.aarch64 else 'AArch32'}")
+        log(f"{msg}, {cpu_state(board)}")
         board.last_progress = time.time()
 
     if "next" in info:
@@ -754,10 +773,11 @@ def install_hooks(board, uc, info):
         watch[saddr] = lambda: milestone(
             f"entered NSIH2 StartAddr 0x{saddr:x} (u-boot)")
     if board.uboot_syms and "relocate_code" in board.uboot_syms:
-        # u-boot copies itself to the top of DDR: once relocate_code(x0 =
+        # u-boot copies itself to the top of DDR: once relocate_code(x0/r0 =
         # new address) runs, add its symbols again at the relocated address.
         def relocated():
-            dest = uc.reg_read(A64.UC_ARM64_REG_X0)
+            dest = uc.reg_read(A64.UC_ARM64_REG_X0 if board.aarch64
+                               else A32.UC_ARM_REG_R0)
             off = dest - board.uboot_syms["_start"]
             syms.load_elf(board.args.uboot_elf, off)
             log(f"u-boot relocating to 0x{dest:x} (offset 0x{off:x})")

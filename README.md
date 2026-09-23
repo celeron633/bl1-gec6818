@@ -30,7 +30,8 @@ This is one of three repos that make up the board's software:
 ### Build configurations
 
 `OPMODE` is the instruction set BL1 itself runs in, `SKIP_ATF` whether
-ARM Trusted Firmware is used:
+ARM Trusted Firmware is used, `UBOOT_ARCH` (default `aarch64`) whether the
+u-boot that a `SKIP_ATF=y` BL1 jumps to is 64- or 32-bit:
 
 | `OPMODE` | `SKIP_ATF` | chain | PSCI from | switch to AArch64 happens in | image at SD offset 0x10200 |
 |---|---|---|---|---|---|
@@ -38,6 +39,7 @@ ARM Trusted Firmware is used:
 | `aarch32` | `y` | BL1 → stage2 → u-boot → Linux | stage2, resident in SRAM at EL3 (`src/stage2_main.c`, `src/psci.c`) | BL1, by warm-resetting CPU0 into stage2 | `u-boot-direct.img` |
 | `aarch64` | `y` | BL1 → u-boot → Linux | BL1 itself, resident at EL3 (`src/psci.c`) | BootROM, via the NSIH header's vector, before BL1 runs | `u-boot-direct.img` |
 | `aarch64` | `n` | not usable: BL1 would jump into `fip-loader.img`'s AArch32 entry in AArch64 | | | |
+| `aarch32` | `y`, `UBOOT_ARCH=aarch32` | BL1 → 32-bit u-boot → (old 32-bit kernel), all in AArch32 secure SVC | none | never | 32-bit `u-boot-direct.img` |
 
 The default (`config.mak`) is `OPMODE=aarch64 SKIP_ATF=y`. The two
 `SKIP_ATF=y` configurations are not yet verified on hardware - see
@@ -63,6 +65,7 @@ track CFLAGS changes):
 make clean && make                                                           # default: no ATF, AArch64 BL1
 make clean && make OPMODE=aarch32 CROSS_TOOL=arm-linux-gnueabi-              # no ATF, via stage2
 make clean && make OPMODE=aarch32 SKIP_ATF=n CROSS_TOOL=arm-linux-gnueabi-   # ATF chain
+make clean && make OPMODE=aarch32 UBOOT_ARCH=aarch32 CROSS_TOOL=arm-linux-gnueabi-   # pure AArch32, 32-bit u-boot
 ```
 
 Add `BOOT_PORT=emmc` to boot from eMMC instead of SD. The no-ATF
@@ -120,8 +123,13 @@ at BL1's DEVICEADDR (0x10200), and symbols come from `out/*.elf` and
 .venv/bin/python tools/s5p6818_emu.py --screenshot lcd      # also save the LCD as lcd-N.png
 ```
 
+A 32-bit u-boot (`UBOOT_ARCH=aarch32`) runs the same way: pass its
+`u-boot-direct.img` with `--next`; the `u-boot` ELF next to it provides
+the symbols.
+
 In `--send`, the first byte only stops the autoboot countdown and is
-dropped, hence the leading `\n`. The SD card is `mmc 1` in u-boot; `mmc 0`
+dropped, hence the leading `\n`. Commands that print a lot (`md`) poll for
+Ctrl-C and eat whatever is queued behind them, so put them last. The SD card is `mmc 1` in u-boot; `mmc 0`
 (eMMC) is empty, so autoboot fails - expected.
 
 **Reading the output.** Guest UART output is printed as-is, emulator
@@ -192,7 +200,8 @@ SD/eMMC 再读一个镜像并跳过去——要么走正常的 ARM Trusted Firmw
 
 ### 编译配置
 
-`OPMODE` 决定 BL1 自己跑在哪个指令集，`SKIP_ATF` 决定用不用 ARM Trusted Firmware：
+`OPMODE` 决定 BL1 自己跑在哪个指令集，`SKIP_ATF` 决定用不用 ARM Trusted Firmware，
+`UBOOT_ARCH`（默认 `aarch64`）决定 `SKIP_ATF=y` 时 BL1 跳去的 u-boot 是 64 位还是 32 位：
 
 | `OPMODE` | `SKIP_ATF` | 链路 | PSCI 由谁提供 | 在哪里切到 AArch64 | SD 卡 0x10200 处放 |
 |---|---|---|---|---|---|
@@ -200,6 +209,7 @@ SD/eMMC 再读一个镜像并跳过去——要么走正常的 ARM Trusted Firmw
 | `aarch32` | `y` | BL1 → stage2 → u-boot → Linux | stage2，常驻 SRAM、运行在 EL3（`src/stage2_main.c`、`src/psci.c`） | BL1 热复位 CPU0 进入 stage2 | `u-boot-direct.img` |
 | `aarch64` | `y` | BL1 → u-boot → Linux | BL1 自己，常驻 EL3（`src/psci.c`） | BootROM 执行 NSIH 头里的向量，BL1 运行之前就已切换 | `u-boot-direct.img` |
 | `aarch64` | `n` | 不可用：BL1 会以 AArch64 跳进 `fip-loader.img` 的 AArch32 入口 | | | |
+| `aarch32` | `y`，`UBOOT_ARCH=aarch32` | BL1 → 32 位 u-boot →（老的 32 位内核），全程 AArch32 安全态 SVC | 无 | 不切换 | 32 位的 `u-boot-direct.img` |
 
 默认配置（`config.mak`）是 `OPMODE=aarch64 SKIP_ATF=y`。两种 `SKIP_ATF=y` 配置都还没上板验证，
 详见 [docs/BOOT_MODES.md](docs/BOOT_MODES.md)。
@@ -223,6 +233,7 @@ export PATH=~/arm-gnu-toolchain-13.2.rel1-x86_64-aarch64-none-elf/bin:$PATH
 make clean && make                                                           # 默认：不走 ATF，AArch64 BL1
 make clean && make OPMODE=aarch32 CROSS_TOOL=arm-linux-gnueabi-              # 不走 ATF，经 stage2
 make clean && make OPMODE=aarch32 SKIP_ATF=n CROSS_TOOL=arm-linux-gnueabi-   # ATF 链路
+make clean && make OPMODE=aarch32 UBOOT_ARCH=aarch32 CROSS_TOOL=arm-linux-gnueabi-   # 纯 AArch32，32 位 u-boot
 ```
 
 加 `BOOT_PORT=emmc` 改为从 eMMC 启动。不走 ATF 的两种配置要配 u-boot 的
@@ -272,7 +283,11 @@ python3 -m venv .venv
 .venv/bin/python tools/s5p6818_emu.py --screenshot lcd      # 同时把屏幕内容存成 lcd-N.png
 ```
 
+32 位 u-boot（`UBOOT_ARCH=aarch32`）也一样跑：用 `--next` 指定它的 `u-boot-direct.img`，
+同目录下的 `u-boot` ELF 会被用来提供符号。
+
 `--send` 的第一个字节只用来打断 autoboot 倒计时，会被吃掉，所以开头放一个 `\n`。
+输出很多的命令（比如 `md`）会检查 Ctrl-C，把排在后面的输入吃掉，所以放在最后。
 SD 卡在 u-boot 里是 `mmc 1`；`mmc 0`（eMMC）没接东西，所以 autoboot 会失败，这是正常的。
 
 **看输出**。客户机的串口输出原样打印，模拟器自己的信息以 `[emu]` 开头（镜像头、SD

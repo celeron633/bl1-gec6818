@@ -152,6 +152,35 @@ make clean && make          # config.mak 的默认值就是这个配置
 推到了 0xFFFF0800，而 NSIH 向量复位到的是 0xFFFF0200。现在向量表放在单独的段里，
 链接脚本也用 `ASSERT` 保证 `Startup` 在 0xFFFF0200。修复后尚未上板验证。
 
+### 纯 AArch32：`OPMODE=aarch32 UBOOT_ARCH=aarch32`
+
+整条链都不切到 AArch64，给老的 32 位内核用：
+
+```
+BootROM (AArch32) -> BL1（AArch32，安全态 SVC）
+   |  和上面一样读 u-boot-direct.img 的 NSIH2，u-boot.bin 放到 0x43C00000
+   v  直接跳过去（pLaunch(0, 4330)），不复位、不切换指令集
+32 位 u-boot（AArch32 安全态 SVC，0x43C00000）-> 32 位内核（bootz）
+```
+
+没有 stage2，也没有 PSCI；BL1 不唤醒副核（`MULTICORE_BRING_UP=0`），副核怎么起来
+交给内核自己。u-boot 要用 u-boot_gec6818 的 `s5p6818_gec6818_aarch32_defconfig`
+和 32 位工具链编译，详见那边的 README：
+
+```
+cd bl1-gec6818
+make clean && make OPMODE=aarch32 UBOOT_ARCH=aarch32 CROSS_TOOL=arm-linux-gnueabi-
+cd ../u-boot_gec6818
+make distclean
+ARCH=arm CROSS_COMPILE=arm-linux-gnueabi- make s5p6818_gec6818_aarch32_defconfig
+ARCH=arm CROSS_COMPILE=arm-linux-gnueabi- make -j"$(nproc)"
+ARCH=arm CROSS_COMPILE=arm-linux-gnueabi- make u-boot-direct.img
+```
+
+`UBOOT_ARCH=aarch32` 只能和 `OPMODE=aarch32 SKIP_ATF=y` 一起用，否则 make 直接报错。
+烧录方式和下面一样（`--mode direct`）。目前只在模拟器里跑到了 u-boot 命令行，
+还没上板。
+
 ### 烧录：先在 SD 卡上测，别碰 eMMC
 
 BL1 仍然从 `DEVICEADDR`（0x10200 / 扇区 0x81）读下一级，所以

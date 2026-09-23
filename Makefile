@@ -72,11 +72,12 @@ SYS_OBJS	+=	psci.o
 endif
 endif
 
-# SKIP_ATF + OPMODE=aarch32: AArch32 BL1 hands off to an AArch64 stage2
-# (src/stage2_main.c) appended to its image - EL3 vectors + PSCI,
-# secondary cores parked, u-boot entered at EL2. Built by a sub-make with
-# the AArch64 toolchain (STAGE2=y), see the stage2 target below.
-ifeq ($(SKIP_ATF)-$(OPMODE),y-aarch32)
+# SKIP_ATF + OPMODE=aarch32 + AArch64 u-boot: AArch32 BL1 hands off to
+# an AArch64 stage2 (src/stage2_main.c) appended to its image - EL3
+# vectors + PSCI, secondary cores parked, u-boot entered at EL2. Built by
+# a sub-make with the AArch64 toolchain (STAGE2=y), see the stage2 target
+# below. Not needed for UBOOT_ARCH=aarch32.
+ifeq ($(SKIP_ATF)-$(OPMODE)-$(UBOOT_ARCH),y-aarch32-aarch64)
 BUILD_STAGE2		= y
 STAGE2_CROSS_TOOL	?= aarch64-none-elf-
 STAGE2_ELF		= $(DIR_TARGETOUTPUT)/stage2.elf

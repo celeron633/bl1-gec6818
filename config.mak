@@ -64,6 +64,12 @@ SECURE_ON			?= 0
 # SKIP_ATF=n (the fip-loader.img chain) needs OPMODE=aarch32.
 SKIP_ATF			?= y
 
+# SKIP_ATF: whether the u-boot BL1 jumps to is AArch64 (default) or
+# AArch32. aarch32 needs OPMODE=aarch32: BL1 jumps straight to a 32-bit
+# u-boot, still in secure SVC - no stage2, no PSCI, secondary cores left
+# off. See docs/BOOT_MODES.md.
+UBOOT_ARCH			?= aarch64
+
 # Which device BL1 (and u-boot after it) boots from: sd or emmc. Picks
 # the reference-nsih/raptor-*-64.txt header tools/mk_bl1_image.py builds
 # BL1's header from, and patches its PortNumber byte to match.
@@ -207,6 +213,15 @@ endif
 
 ifeq ($(SKIP_ATF), y)
 CFLAGS				+=	-DSKIP_ATF
+endif
+
+ifeq ($(UBOOT_ARCH), aarch32)
+ifneq ($(OPMODE)-$(SKIP_ATF), aarch32-y)
+$(error UBOOT_ARCH=aarch32 needs OPMODE=aarch32 SKIP_ATF=y)
+endif
+CFLAGS				+=	-DUBOOT_AARCH32
+else ifneq ($(UBOOT_ARCH), aarch64)
+$(error UBOOT_ARCH must be aarch64 or aarch32)
 endif
 
 ifeq ($(BOOT_LOGO), y)

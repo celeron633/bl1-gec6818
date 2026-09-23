@@ -83,7 +83,7 @@ extern U32 GetCurrentSMode(void);
 
 void simple_memtest(U32 *pStart, U32 *pEnd);
 
-#if defined(SKIP_ATF) && defined(aarch32)
+#if defined(SKIP_ATF) && defined(aarch32) && !defined(UBOOT_AARCH32)
 /*
  * Reset CPU0 into AArch64 at the stage2 stub (STAGE2_AARCH64_ADDR), the
  * same TIEOFF + warm-reset trick BootROM's NSIH vector uses to start an
@@ -510,11 +510,13 @@ void BootMain(U32 CPUID)
 		SwitchToEL2();
 		SYSMSG("after SwitchToEL2: EL%d\r\n", GetCurrentSMode());
 #endif
-#if defined(SKIP_ATF) && defined(aarch32)
+#if defined(SKIP_ATF) && defined(aarch32) && !defined(UBOOT_AARCH32)
 		/* u-boot is AArch64 and wants a resident EL3 for PSCI: hand
 		 * over to the AArch64 stage2 instead of jumping there. */
 		LaunchStage2(pTBI->LAUNCHADDR);
 #endif
+		/* UBOOT_AARCH32: a 32-bit u-boot is entered directly, in
+		 * secure SVC mode like BL1 itself. */
 		temp = 0x10000000;
 		while (!DebugIsUartTxDone() && temp--);
 		pLaunch(0, 4330);
