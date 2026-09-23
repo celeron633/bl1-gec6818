@@ -40,7 +40,7 @@ GetCurrentSMode:
 //; unsigned int GetCPUID(void);
 GetCPUID:
 	mrc     p15, 0, r0, c0, c0, 5              //; Get our cpu id
-	tst     r0, #0x4400                        //; check processor affinity
+	tst     r0, #0xFF00                        //; Aff1 != 0: cluster 1
 	orrne   r0, r0, #4                        //; mark cpu0 or cpu1
 	ands    r0, r0, #0xF                      //; Save CPU id
 	bx		lr

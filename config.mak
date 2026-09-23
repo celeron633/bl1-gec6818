@@ -199,8 +199,16 @@ CFLAGS				+=	-DSKIP_ATF
 endif
 
 ifeq ($(OPMODE) , aarch32)
+# -marm: the hand-written .S files (startup_aarch32.S etc.) are plain ARM
+# with no Thumb interworking markup. Modern arm-linux-gnueabi- toolchains
+# default C code to Thumb, and a Thumb "bl" into one of those ARM-only
+# routines (e.g. __pllchange) has no state switch - the core decodes the
+# target's ARM opcode bytes as Thumb and hits an Undefined Instruction
+# almost immediately. Force ARM throughout so C and .S code share one
+# instruction state and no interworking is needed at all.
 CFLAGS				+=	-msoft-float					\
-					-mstructure-size-boundary=32
+					-mstructure-size-boundary=32			\
+					-marm
 endif
 
 ifeq ($(OPMODE) , aarch64)

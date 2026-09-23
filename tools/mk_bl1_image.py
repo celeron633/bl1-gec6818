@@ -54,12 +54,43 @@ import sys
 NSIH_SIZE = 512
 NSIH_WORDS = NSIH_SIZE // 4
 LOADSIZE_OFFSET = 0x044
+LOADADDR_OFFSET = 0x048
 PORT_NUMBER_OFFSET = 0x050
 PORTS = {"sd": 0x00, "emmc": 0x02}
 NSIH_TEXT_BY_PORT = {
     "sd": "reference-nsih/raptor-sd-64.txt",
     "emmc": "reference-nsih/raptor-emmc-64.txt",
 }
+
+# Offset from LOADADDR where the linker script assumes compiled code
+# starts (i.e. right after this 512-byte header).
+CODE_OFFSET = NSIH_SIZE
+
+# B <self>: a safe placeholder for vector slots that should never
+# legitimately be reached this early - if they ever are, the core spins
+# here predictably instead of executing whatever else happened to be at
+# that header offset.
+B_SELF = 0xEAFFFFFE
+
+
+def arm_branch(from_addr, to_addr):
+    """Encode an ARM `B` instruction at from_addr targeting to_addr."""
+    offset = (to_addr - from_addr - 8) >> 2
+    return 0xEA000000 | (offset & 0x00FFFFFF)
+
+
+def patch_vector_for_aarch32(header, load_addr):
+    """Overwrite the header's 16-word vector area for an OPMODE=aarch32
+    build: word 0 branches straight to the compiled code (LOADADDR +
+    CODE_OFFSET) instead of the reference header's switch-to-AArch64
+    stub. The rest become B-self: with high vectors (SCTLR.V) these words
+    also serve as the Undefined/SWI/Abort/IRQ/FIQ handlers, so a stray
+    exception hangs predictably.
+    """
+    entry = load_addr + CODE_OFFSET
+    header[0:4] = arm_branch(load_addr, entry).to_bytes(4, "little")
+    for i in range(1, 16):
+        header[i * 4:i * 4 + 4] = B_SELF.to_bytes(4, "little")
 
 
 def parse_nsih_txt(path):
@@ -99,8 +130,12 @@ def main():
     p.add_argument("--header-from",
                     help="reference-nsih-style .txt file to build the header from "
                          "(default: matches --port, see NSIH_TEXT_BY_PORT)")
+    p.add_argument("--opmode", choices=("aarch32", "aarch64"), default="aarch64",
+                    help="must match the OPMODE the raw binary was compiled with "
+                         "(default: %(default)s). aarch32 replaces the reference "
+                         "header's AArch64-switch vector stub with a plain branch "
+                         "to the compiled code - see patch_vector_for_aarch32()")
     args = p.parse_args()
-
     header_from = args.header_from or NSIH_TEXT_BY_PORT[args.port]
     header = parse_nsih_txt(header_from)
 
@@ -111,17 +146,22 @@ def main():
     with open(args.raw_bin, "rb") as f:
         code = f.read()
 
+    load_addr = int.from_bytes(header[LOADADDR_OFFSET:LOADADDR_OFFSET + 4], "little")
+
     loadsize = NSIH_SIZE + len(code)
     header[LOADSIZE_OFFSET:LOADSIZE_OFFSET + 4] = loadsize.to_bytes(4, "little")
     header[PORT_NUMBER_OFFSET] = PORTS[args.port]
+
+    if args.opmode == "aarch32":
+        patch_vector_for_aarch32(header, load_addr)
 
     with open(args.output, "wb") as f:
         f.write(header)
         f.write(code)
 
-    print(f"header from {header_from} ({NSIH_SIZE} bytes, port={args.port}) + "
-          f"{args.raw_bin} ({len(code)} bytes) -> {args.output} "
-          f"(LOADSIZE=0x{loadsize:x})")
+    print(f"header from {header_from} ({NSIH_SIZE} bytes, port={args.port}, "
+          f"opmode={args.opmode}) + {args.raw_bin} ({len(code)} bytes) -> "
+          f"{args.output} (LOADSIZE=0x{loadsize:x})")
 
 
 if __name__ == "__main__":
