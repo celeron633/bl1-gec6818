@@ -108,7 +108,7 @@ u-boot（AArch64 EL2，0x43C00000）-> Linux（PSCI 的 SMC 由 stage2 处理）
 ```
 
 stage2 在这条链里的角色相当于 ATF 链中的 BL31。它由 Makefile 里的子 make
-用 AArch64 工具链编译（`STAGE2_CROSS_TOOL`，默认 `aarch64-none-elf-`），再由
+用 AArch64 工具链编译（`STAGE2_CROSS_TOOL`，默认取 `CROSS_TOOL_aarch64`，即 `aarch64-none-elf-`），再由
 `tools/mk_bl1_image.py --stage2` 拼进 BL1 镜像。BL1 或 stage2 超出各自的
 SRAM 区域时构建会直接失败。
 
@@ -128,6 +128,7 @@ cd bl1-gec6818
 make clean && make OPMODE=aarch32 CROSS_TOOL=<arm-linux-gnueabi- 前缀>
                                   # 切换模式前一定先 make clean：CFLAGS 不同，
                                   # Makefile 自己检测不到
+                                  # （用 make menuconfig 选配置就不用 clean，见 README）
 cd ../u-boot_gec6818
 make u-boot-direct.img            # 不是 fip-nonsecure.img，原因见下
 ```
@@ -145,7 +146,7 @@ BL1，所以不需要 stage2：BL1 本身常驻 EL3 处理 PSCI（同一份 `src
 （`u-boot-direct.img`）和烧录方式与上面相同，只需一套 `aarch64-none-elf` 工具链：
 
 ```
-make clean && make          # config.mak 的默认值就是这个配置
+make clean && make          # config.mak 的默认值就是这个配置（没有 .config.mak 时）
 ```
 
 这个配置曾经完全不出串口，原因是 2KB 对齐的异常向量表把 `.text` 连同 `Startup`

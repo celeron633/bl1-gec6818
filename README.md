@@ -58,8 +58,23 @@ tar xf arm-gnu-toolchain-13.2.rel1-x86_64-aarch64-none-elf.tar.xz -C ~/
 export PATH=~/arm-gnu-toolchain-13.2.rel1-x86_64-aarch64-none-elf/bin:$PATH
 ```
 
-`make clean` whenever you switch configurations (the Makefile doesn't
-track CFLAGS changes):
+The easiest way to pick a configuration is the menu:
+
+```sh
+make menuconfig          # or tools/menuconfig.py; --print just shows the config
+make
+```
+
+It covers `OPMODE`, `SKIP_ATF`, `UBOOT_ARCH`, `BOOT_PORT`, the toolchain
+prefixes (`CROSS_TOOL_aarch32`/`CROSS_TOOL_aarch64`, the latter also used
+for the stage2) and the boot logo options, only offers valid combinations,
+and shows which boot chain the result is. It saves to `.config.mak`
+(git-ignored), which `config.mak` reads in place of its defaults. Objects
+depend on that file, so after saving, a plain `make` rebuilds everything.
+
+Variables on the make command line still override `.config.mak`. That
+route does need a `make clean` whenever you switch configurations (the
+Makefile doesn't track CFLAGS changes):
 
 ```sh
 make clean && make                                                           # default: no ATF, AArch64 BL1
@@ -203,7 +218,8 @@ Key files:
 | `src/psci.c` | minimal PSCI implementation, only used in `SKIP_ATF` mode |
 | `src/pmic.c` | PMIC control (ARM/DDR voltage) |
 | `src/init_DDR3.c` / `src/init_LPDDR3.c` | DRAM init |
-| `config.mak` | build config: `OPMODE`, `BOARD`, `SKIP_ATF`, toolchain prefix |
+| `config.mak` | build config: `OPMODE`, `BOARD`, `SKIP_ATF`, toolchain prefix; reads `.config.mak` first |
+| `tools/menuconfig.py` | `make menuconfig`: terminal UI that writes `.config.mak` |
 
 ### Original README
 
@@ -259,7 +275,21 @@ tar xf arm-gnu-toolchain-13.2.rel1-x86_64-aarch64-none-elf.tar.xz -C ~/
 export PATH=~/arm-gnu-toolchain-13.2.rel1-x86_64-aarch64-none-elf/bin:$PATH
 ```
 
-切换配置时一定先 `make clean`（Makefile 检测不到 CFLAGS 的变化）：
+选配置最方便的是用菜单：
+
+```sh
+make menuconfig          # 或 tools/menuconfig.py；加 --print 只打印当前配置
+make
+```
+
+菜单里可以选 `OPMODE`、`SKIP_ATF`、`UBOOT_ARCH`、`BOOT_PORT`、工具链前缀
+（`CROSS_TOOL_aarch32`/`CROSS_TOOL_aarch64`，后者也用来编 stage2）以及开机 logo
+相关选项。不合法的组合选不出来，还会显示当前配置对应的启动链路。配置保存到
+`.config.mak`（已被 git 忽略），`config.mak` 会先读它，再用自己的默认值补上没设的。
+所有目标文件都依赖这个文件，所以保存后直接 `make` 就会全部重新编译。
+
+命令行上的变量仍然优先于 `.config.mak`。走命令行的话，切换配置时一定先
+`make clean`（Makefile 检测不到 CFLAGS 的变化）：
 
 ```sh
 make clean && make                                                           # 默认：不走 ATF，AArch64 BL1
@@ -384,7 +414,8 @@ SD 卡在 u-boot 里是 `mmc 1`；`mmc 0`（eMMC）没接东西，所以 autoboo
 | `src/psci.c` | 最小化 PSCI 实现，只在 `SKIP_ATF` 模式下用 |
 | `src/pmic.c` | PMIC 控制（ARM/DDR 电压） |
 | `src/init_DDR3.c` / `src/init_LPDDR3.c` | DRAM 初始化 |
-| `config.mak` | 编译配置：`OPMODE`、`BOARD`、`SKIP_ATF`、工具链前缀 |
+| `config.mak` | 编译配置：`OPMODE`、`BOARD`、`SKIP_ATF`、工具链前缀；先读 `.config.mak` |
+| `tools/menuconfig.py` | `make menuconfig`：终端菜单，写 `.config.mak` |
 
 ### 原始 README
 

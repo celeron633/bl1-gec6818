@@ -79,7 +79,7 @@ endif
 # below. Not needed for UBOOT_ARCH=aarch32.
 ifeq ($(SKIP_ATF)-$(OPMODE)-$(UBOOT_ARCH),y-aarch32-aarch64)
 BUILD_STAGE2		= y
-STAGE2_CROSS_TOOL	?= aarch64-none-elf-
+STAGE2_CROSS_TOOL	?= $(CROSS_TOOL_aarch64)
 STAGE2_ELF		= $(DIR_TARGETOUTPUT)/stage2.elf
 STAGE2_BIN		= $(DIR_TARGETOUTPUT)/stage2.bin
 endif
@@ -97,11 +97,15 @@ SYS_INCLUDES	=	-I src				\
 			-I prototype/module
 
 ###################################################################################################
-$(DIR_OBJOUTPUT)/%.o: src/%.c
+# Objects also depend on .config.mak, so saving a new configuration from
+# `make menuconfig` rebuilds them (options on the make command line don't).
+CONFIG_DEPS	=	$(wildcard .config.mak)
+
+$(DIR_OBJOUTPUT)/%.o: src/%.c $(CONFIG_DEPS)
 	@echo [compile....$<]
 	$(Q)$(CC) -MMD $< -c -o $@ $(CFLAGS) $(SYS_INCLUDES)
 ###################################################################################################
-$(DIR_OBJOUTPUT)/%.o: src/%.S
+$(DIR_OBJOUTPUT)/%.o: src/%.S $(CONFIG_DEPS)
 	@echo [compile....$<]
 	$(Q)$(CC) -MMD $< -c -o $@ $(ASFLAG) $(CFLAGS) $(SYS_INCLUDES)
 ###################################################################################################
@@ -158,6 +162,10 @@ else
 		$(RM) $(DIR_OBJOUTPUT)/buildinfo.o;	\
 	fi;
 endif
+
+###################################################################################################
+menuconfig:
+	@python3 tools/menuconfig.py
 
 ###################################################################################################
 clean:

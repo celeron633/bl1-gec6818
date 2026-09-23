@@ -22,9 +22,13 @@ VERINFO				= V110
 ###########################################################################
 # Build Environment
 ###########################################################################
+# Values saved by `make menuconfig` (tools/menuconfig.py). They replace the
+# ?= defaults below; variables given on the make command line still win.
+-include .config.mak
+
 DEBUG				= y
 
-OPMODE				= aarch64
+OPMODE				?= aarch64
 #OPMODE				= aarch32
 
 MEMTYPE				= DDR3
@@ -86,27 +90,17 @@ BOOT_LOGO_TEXT			?= S5P6818 BL1 Loading...
 BOOT_LOGO_DELAY_MS		?= 500
 LCD_BACKLIGHT			?= none
 
-# cross-tool pre-header
-ifeq ($(OPMODE), aarch32)
+# cross-tool pre-header: one prefix per OPMODE, so `make OPMODE=...` picks
+# the matching toolchain even when .config.mak was saved for the other one.
+# CROSS_TOOL_aarch64 also builds the SKIP_ATF stage2 (STAGE2_CROSS_TOOL).
 ifeq ($(OS),Windows_NT)
-CROSS_TOOL_TOP			=
-CROSS_TOOL			= $(CROSS_TOOL_TOP)arm-none-eabi-
+CROSS_TOOL_aarch32		?= arm-none-eabi-
 else
-CROSS_TOOL_TOP			=
-CROSS_TOOL			= $(CROSS_TOOL_TOP)arm-eabi-
+CROSS_TOOL_aarch32		?= arm-eabi-
 endif
-endif
-
-ifeq ($(OPMODE), aarch64)
-ifeq ($(OS),Windows_NT)
-CROSS_TOOL_TOP			=
-CROSS_TOOL			= $(CROSS_TOOL_TOP)aarch64-none-elf-
-else
-CROSS_TOOL_TOP			=
-CROSS_TOOL			= $(CROSS_TOOL_TOP)aarch64-none-elf-
-#CROSS_TOOL			= $(CROSS_TOOL_TOP)aarch64-elf-
-endif
-endif
+CROSS_TOOL_aarch64		?= aarch64-none-elf-
+#CROSS_TOOL_aarch64		?= aarch64-elf-
+CROSS_TOOL			?= $(CROSS_TOOL_$(OPMODE))
 
 ###########################################################################
 # Top Names
