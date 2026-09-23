@@ -45,10 +45,11 @@ SUPPORT_SDMMC_BOOT		= y
 
 #BOARD				= SVT
 #BOARD				= ASB
-BOARD				= DRONE
+#BOARD				= DRONE
 #BOARD				= AVN
 #BOARD				= BF700
 #BOARD				?= RAPTOR
+BOARD				= GEC6818
 
 # System Log Message
 SYSLOG				?= y
