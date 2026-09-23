@@ -137,8 +137,20 @@ make u-boot-direct.img            # 不是 fip-nonsecure.img，原因见下
 `SECURE_BINGEN`，参数为 `-l CONFIG_SYS_TEXT_BASE-0x400 -e CONFIG_SYS_TEXT_BASE`，
 这样 u-boot 正好落在它的链接地址上。
 
-`OPMODE=aarch64 SKIP_ATF=y`（BL1 整体跑在 AArch64、常驻 EL3，用同一份
-psci.c）也能编译，但在这块板子上从来没有输出过串口信息。
+### 另一种做法：`OPMODE=aarch64 SKIP_ATF=y`
+
+BootROM 执行 NSIH 头里的向量，直接把核心复位成 AArch64、从 0xFFFF0200 开始跑
+BL1，所以不需要 stage2：BL1 本身常驻 EL3 处理 PSCI（同一份 `src/psci.c`），
+副核上电后停在 EL3，最后经 `SwitchToEL2()` 进入 u-boot。u-boot 镜像
+（`u-boot-direct.img`）和烧录方式与上面相同，只需一套 `aarch64-none-elf` 工具链：
+
+```
+make clean && make OPMODE=aarch64 SKIP_ATF=y
+```
+
+这个配置曾经完全不出串口，原因是 2KB 对齐的异常向量表把 `.text` 连同 `Startup`
+推到了 0xFFFF0800，而 NSIH 向量复位到的是 0xFFFF0200。现在向量表放在单独的段里，
+链接脚本也用 `ASSERT` 保证 `Startup` 在 0xFFFF0200。修复后尚未上板验证。
 
 ### 烧录：先在 SD 卡上测，别碰 eMMC
 

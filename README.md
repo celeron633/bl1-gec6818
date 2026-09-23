@@ -27,18 +27,28 @@ This is one of three repos that make up the board's software:
 - [linux_kernel_gec6818](https://github.com/celeron633/linux_kernel_gec6818)
   (branch `gec6818-v4.4.y`) - kernel
 
-### Two boot modes
+### Build configurations
 
-| | normal (default) | `SKIP_ATF=y` |
-|---|---|---|
-| chain | BL1 → `fip-loader.img` (ATF BL2) → `fip-secure.img` (BL31+OP-TEE) → u-boot → Linux | BL1 (AArch32) → stage2 (AArch64 EL3) → u-boot → Linux, no ATF/OP-TEE at all |
-| PSCI | provided by BL31 | BL1's resident AArch64 stage2 (`src/stage2_main.c`, `src/psci.c`) |
-| status | production | not yet verified on hardware - see docs/BOOT_MODES.md |
+`OPMODE` is the instruction set BL1 itself runs in, `SKIP_ATF` whether
+ARM Trusted Firmware is used:
+
+| `OPMODE` | `SKIP_ATF` | chain | PSCI from | switch to AArch64 happens in | image at SD offset 0x10200 |
+|---|---|---|---|---|---|
+| `aarch32` | `n` | BL1 → `fip-loader.img` → `fip-secure.img` (BL31+OP-TEE) → u-boot → Linux | BL31 | `fip-loader.img` (its entry is AArch32 code) | `fip-loader.img` |
+| `aarch32` | `y` | BL1 → stage2 → u-boot → Linux | stage2, resident in SRAM at EL3 (`src/stage2_main.c`, `src/psci.c`) | BL1, by warm-resetting CPU0 into stage2 | `u-boot-direct.img` |
+| `aarch64` | `y` | BL1 → u-boot → Linux | BL1 itself, resident at EL3 (`src/psci.c`) | BootROM, via the NSIH header's vector, before BL1 runs | `u-boot-direct.img` |
+| `aarch64` | `n` | not usable: BL1 would jump into `fip-loader.img`'s AArch32 entry in AArch64 | | | |
+
+The two `SKIP_ATF=y` configurations are not yet verified on hardware -
+see [docs/BOOT_MODES.md](docs/BOOT_MODES.md). `config.mak` defaults to
+`OPMODE=aarch64`, `SKIP_ATF=n` (the unusable one), so always pass both.
 
 ### Building
 
-Toolchain - [Arm GNU Toolchain](https://developer.arm.com/downloads/-/arm-gnu-toolchain-downloads)
-13.2.rel1, `aarch64-none-elf` target:
+Toolchains:
+- `aarch64-none-elf` ([Arm GNU Toolchain](https://developer.arm.com/downloads/-/arm-gnu-toolchain-downloads)
+  13.2.rel1) - `OPMODE=aarch64`, and the stage2 of `OPMODE=aarch32 SKIP_ATF=y`
+- `arm-linux-gnueabi` (tested: Linaro 7.5.0-2019.12) - `OPMODE=aarch32`
 
 ```sh
 wget https://developer.arm.com/-/media/Files/downloads/gnu/13.2.rel1/binrel/arm-gnu-toolchain-13.2.rel1-x86_64-aarch64-none-elf.tar.xz
@@ -46,16 +56,18 @@ tar xf arm-gnu-toolchain-13.2.rel1-x86_64-aarch64-none-elf.tar.xz -C ~/
 export PATH=~/arm-gnu-toolchain-13.2.rel1-x86_64-aarch64-none-elf/bin:$PATH
 ```
 
-BL1 itself is built as AArch32 (`OPMODE=aarch32`), which also needs an
-`arm-linux-gnueabi-` toolchain (tested: Linaro 7.5.0-2019.12); the
-`aarch64-none-elf` one builds the SKIP_ATF stage2.
-
-Check `config.mak` (`OPMODE`, `BOARD`), then:
+`make clean` whenever you switch configurations (the Makefile doesn't
+track CFLAGS changes):
 
 ```sh
-make OPMODE=aarch32 CROSS_TOOL=arm-linux-gnueabi-                # normal ATF chain
-make OPMODE=aarch32 SKIP_ATF=y CROSS_TOOL=arm-linux-gnueabi-   # no ATF - see docs/BOOT_MODES.md
+make clean && make OPMODE=aarch32 CROSS_TOOL=arm-linux-gnueabi-              # ATF chain
+make clean && make OPMODE=aarch32 SKIP_ATF=y CROSS_TOOL=arm-linux-gnueabi-   # no ATF, via stage2
+make clean && make OPMODE=aarch64 SKIP_ATF=y                                  # no ATF, AArch64 BL1
 ```
+
+Add `BOOT_PORT=emmc` to boot from eMMC instead of SD. The no-ATF
+configurations need u-boot's `u-boot-direct.img` (`make u-boot-direct.img`
+in u-boot_gec6818), not `fip-nonsecure.img`.
 
 GitHub Actions builds both modes (plus the matching u-boot images) on every
 push and uploads them as a workflow artifact - see the badge above, or
@@ -117,18 +129,26 @@ SD/eMMC 再读一个镜像并跳过去——要么走正常的 ARM Trusted Firmw
 - [linux_kernel_gec6818](https://github.com/celeron633/linux_kernel_gec6818)
   （分支 `gec6818-v4.4.y`）—— 内核
 
-### 两种启动模式
+### 编译配置
 
-| | 正常模式（默认） | `SKIP_ATF=y` |
-|---|---|---|
-| 链路 | BL1 → `fip-loader.img`（ATF BL2）→ `fip-secure.img`（BL31+OP-TEE）→ u-boot → Linux | BL1（AArch32）→ stage2（AArch64 EL3）→ u-boot → Linux，完全不走 ATF/OP-TEE |
-| PSCI | 由 BL31 提供 | BL1 自带的常驻 AArch64 stage2 实现（`src/stage2_main.c`、`src/psci.c`） |
-| 状态 | 生产可用 | 尚未上板验证，见 docs/BOOT_MODES.md |
+`OPMODE` 决定 BL1 自己跑在哪个指令集，`SKIP_ATF` 决定用不用 ARM Trusted Firmware：
+
+| `OPMODE` | `SKIP_ATF` | 链路 | PSCI 由谁提供 | 在哪里切到 AArch64 | SD 卡 0x10200 处放 |
+|---|---|---|---|---|---|
+| `aarch32` | `n` | BL1 → `fip-loader.img` → `fip-secure.img`（BL31+OP-TEE）→ u-boot → Linux | BL31 | `fip-loader.img`（它的入口是 AArch32 代码） | `fip-loader.img` |
+| `aarch32` | `y` | BL1 → stage2 → u-boot → Linux | stage2，常驻 SRAM、运行在 EL3（`src/stage2_main.c`、`src/psci.c`） | BL1 热复位 CPU0 进入 stage2 | `u-boot-direct.img` |
+| `aarch64` | `y` | BL1 → u-boot → Linux | BL1 自己，常驻 EL3（`src/psci.c`） | BootROM 执行 NSIH 头里的向量，BL1 运行之前就已切换 | `u-boot-direct.img` |
+| `aarch64` | `n` | 不可用：BL1 会以 AArch64 跳进 `fip-loader.img` 的 AArch32 入口 | | | |
+
+两种 `SKIP_ATF=y` 配置都还没上板验证，详见 [docs/BOOT_MODES.md](docs/BOOT_MODES.md)。
+`config.mak` 的默认值是 `OPMODE=aarch64`、`SKIP_ATF=n`，正好是不可用的那种，所以编译时两个都要显式指定。
 
 ### 编译
 
-工具链——[Arm GNU Toolchain](https://developer.arm.com/downloads/-/arm-gnu-toolchain-downloads)
-13.2.rel1，`aarch64-none-elf` 版本：
+工具链：
+- `aarch64-none-elf`（[Arm GNU Toolchain](https://developer.arm.com/downloads/-/arm-gnu-toolchain-downloads)
+  13.2.rel1）：用于 `OPMODE=aarch64`，以及 `OPMODE=aarch32 SKIP_ATF=y` 里的 stage2
+- `arm-linux-gnueabi`（已测试 Linaro 7.5.0-2019.12）：用于 `OPMODE=aarch32`
 
 ```sh
 wget https://developer.arm.com/-/media/Files/downloads/gnu/13.2.rel1/binrel/arm-gnu-toolchain-13.2.rel1-x86_64-aarch64-none-elf.tar.xz
@@ -136,15 +156,16 @@ tar xf arm-gnu-toolchain-13.2.rel1-x86_64-aarch64-none-elf.tar.xz -C ~/
 export PATH=~/arm-gnu-toolchain-13.2.rel1-x86_64-aarch64-none-elf/bin:$PATH
 ```
 
-BL1 本身按 AArch32 编译（`OPMODE=aarch32`），还需要一套 `arm-linux-gnueabi-`
-工具链（已测试 Linaro 7.5.0-2019.12）；`aarch64-none-elf` 用来编译 SKIP_ATF 的 stage2。
-
-先检查 `config.mak`（`OPMODE`、`BOARD`），然后：
+切换配置时一定先 `make clean`（Makefile 检测不到 CFLAGS 的变化）：
 
 ```sh
-make OPMODE=aarch32 CROSS_TOOL=arm-linux-gnueabi-                # 正常 ATF 链路
-make OPMODE=aarch32 SKIP_ATF=y CROSS_TOOL=arm-linux-gnueabi-   # 跳过 ATF —— 见 docs/BOOT_MODES.md
+make clean && make OPMODE=aarch32 CROSS_TOOL=arm-linux-gnueabi-              # ATF 链路
+make clean && make OPMODE=aarch32 SKIP_ATF=y CROSS_TOOL=arm-linux-gnueabi-   # 不走 ATF，经 stage2
+make clean && make OPMODE=aarch64 SKIP_ATF=y                                  # 不走 ATF，AArch64 BL1
 ```
+
+加 `BOOT_PORT=emmc` 改为从 eMMC 启动。不走 ATF 的两种配置要配 u-boot 的
+`u-boot-direct.img`（在 u-boot_gec6818 里 `make u-boot-direct.img`），不是 `fip-nonsecure.img`。
 
 每次 push，GitHub Actions 会把两种模式（以及配套的 u-boot 镜像）都编译好，打包成
 workflow artifact 上传——看上面的徽章，或者 `.github/workflows/build.yml`。
