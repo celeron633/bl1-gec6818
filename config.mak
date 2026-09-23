@@ -73,8 +73,8 @@ CROSS_TOOL_TOP			=
 CROSS_TOOL			= $(CROSS_TOOL_TOP)aarch64-none-elf-
 else
 CROSS_TOOL_TOP			=
-#CROSS_TOOL			= $(CROSS_TOOL_TOP)aarch64-none-elf-
-CROSS_TOOL			= $(CROSS_TOOL_TOP)aarch64-elf-
+CROSS_TOOL			= $(CROSS_TOOL_TOP)aarch64-none-elf-
+#CROSS_TOOL			= $(CROSS_TOOL_TOP)aarch64-elf-
 endif
 endif
 
@@ -157,7 +157,15 @@ ARLIBFLAGS			= -v -s
 
 ASFLAG				= -D__ASSEMBLY__ -D$(OPMODE)
 
-CFLAGS				+=	-g -Wall						\
+# -fcommon: several prototype/module/*.h headers declare things like
+# "enum {...} TZPORT;" (a missing `typedef`, so it's an accidental global
+# variable definition, not a type) and get #included into many .c files.
+# GCC <10 defaulted to -fcommon, letting the linker merge those repeated
+# tentative definitions; GCC 10+ defaults to -fno-common and fails to
+# link with "multiple definition of ...". Not something SKIP_ATF/this
+# fork touches - it's just what building this old code with a modern
+# toolchain needs.
+CFLAGS				+=	-g -Wall -fcommon				\
 					-Wextra -ffreestanding -fno-builtin	\
 					-mlittle-endian						\
 					-mcpu=$(CPU)						\
@@ -182,8 +190,12 @@ endif
 ifeq ($(OPMODE) , aarch64)
 ASFLAG				+=	-march=$(ARCH) -mcpu=$(CPU)
 
+# -mstrict-align: avoid unaligned accesses in generated code. Without it,
+# newer GCC (6/7+) can emit unaligned load/store pairs that fault when they
+# land on this SoC's MMIO/packed-struct regions this code was never tuned
+# against - see rafaello7/bl1-nanopi-m3 commit d7f82f0.
 CFLAGS				+=	-mcmodel=small					\
-					-march=$(ARCH)
+					-march=$(ARCH) -mstrict-align
 endif
 
 ifeq ($(INITPMIC), YES)
