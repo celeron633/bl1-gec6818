@@ -80,6 +80,56 @@ byte offsets on an SD card for either mode - see docs/BOOT_MODES.md for the
 exact commands. **Test on a spare SD card, not eMMC** - wrong offsets on
 eMMC can brick the board.
 
+### Emulator
+
+`tools/s5p6818_emu.py` runs the boot chain on CPU0 in Unicorn, no board
+needed: BootROM (emulated in Python) -> NSIH1 vector stub -> TIEOFF warm
+reset -> BL1 -> NSIH2 -> u-boot, down to the u-boot prompt. It models the
+UARTs, DW MMC (SD card built from the images), timer and the PLL/DDR status
+polls; secondary cores, interrupts and eMMC are not emulated.
+
+**Setup** (once). Needs Python 3 with venv; on Debian/Ubuntu install
+`python3-venv` first if `python3 -m venv` fails:
+
+```
+python3 -m venv .venv
+.venv/bin/pip install unicorn capstone
+```
+
+**Run.** Build BL1 and u-boot first. By default the SD card image is
+`out/bl1-gec6818.bin` at offset 0x200 plus `../u-boot_gec6818/u-boot-direct.img`
+at BL1's DEVICEADDR (0x10200), and symbols come from `out/*.elf` and
+`../u-boot_gec6818/u-boot`:
+
+```
+.venv/bin/python tools/s5p6818_emu.py                      # boot to the u-boot prompt, then exit
+.venv/bin/python tools/s5p6818_emu.py -i                   # interactive u-boot console, Ctrl-] quits
+.venv/bin/python tools/s5p6818_emu.py --send '\nmmc dev 1\nmmc info\n'   # scripted u-boot commands
+.venv/bin/python tools/s5p6818_emu.py --bl1 other/bl1.bin --next other/u-boot-direct.img
+.venv/bin/python tools/s5p6818_emu.py --sd-image sd.img    # a raw SD card image instead
+```
+
+In `--send`, the first byte only stops the autoboot countdown and is
+dropped, hence the leading `\n`. The SD card is `mmc 1` in u-boot; `mmc 0`
+(eMMC) is empty, so autoboot fails - expected.
+
+**Reading the output.** Guest UART output is printed as-is, emulator
+messages start with `[emu]` (image headers, SD reads, CPU0 resets, u-boot
+entry and relocation). The run ends when:
+
+- the guest waits for console input (e.g. at the u-boot prompt) - exit code 0
+- `--timeout` seconds pass (default 30) - exit code 0
+- nothing is printed or read from SD for `--hang-seconds` (default 5), or the
+  guest faults (unmapped access, undefined instruction, SMC, ...) - exit
+  code 1, with registers, a backtrace and disassembly around PC
+
+In the emulator, DDR gate leveling always prints "fail" and secondary CPUs
+are reported dead; BL1 carries on and neither is a real problem.
+
+**Debug options:** `--trace` (every function/label entered), `--trace-sd`
+(SD commands and responses), `--log-mmio` (every peripheral register
+access with the PC that did it), `--elf`/`--uboot-elf` (other symbol files).
+
 ### Source tree
 
 ```
@@ -90,7 +140,7 @@ eMMC can brick the board.
 │   └── module
 ├── nsih-generator    # Excel-based NSIH header generator (Windows)
 ├── reference-nsih    # reference NSIH text files for various boards
-└── tools             # write_sdcard.py
+└── tools             # write_sdcard.py, s5p6818_emu.py
 ```
 
 Key files:
@@ -176,6 +226,50 @@ workflow artifact 上传——看上面的徽章，或者 `.github/workflows/bui
 模式的具体命令见 docs/BOOT_MODES.md。**先在备用 SD 卡上测，别碰 eMMC**——eMMC 上偏移
 写错有砖机风险。
 
+### 模拟器
+
+`tools/s5p6818_emu.py` 用 Unicorn 在 CPU0 上跑整条启动链，不需要板子：BootROM（用
+Python 模拟）-> NSIH1 向量存根 -> TIEOFF 热复位 -> BL1 -> NSIH2 -> u-boot，一直到
+u-boot 命令行。模拟了 UART、DW MMC（用镜像拼出 SD 卡）、定时器，以及 PLL/DDR 的状态
+轮询；副核、中断和 eMMC 没有模拟。
+
+**准备**（只需一次）。需要带 venv 的 Python 3；Debian/Ubuntu 上如果 `python3 -m venv`
+报错，先装 `python3-venv`：
+
+```
+python3 -m venv .venv
+.venv/bin/pip install unicorn capstone
+```
+
+**运行**。先编好 BL1 和 u-boot。默认把 `out/bl1-gec6818.bin` 放在 SD 偏移 0x200，
+`../u-boot_gec6818/u-boot-direct.img` 放在 BL1 的 DEVICEADDR（0x10200），拼成 SD 卡；
+符号取自 `out/*.elf` 和 `../u-boot_gec6818/u-boot`：
+
+```
+.venv/bin/python tools/s5p6818_emu.py                      # 跑到 u-boot 提示符后退出
+.venv/bin/python tools/s5p6818_emu.py -i                   # 交互式 u-boot 控制台，Ctrl-] 退出
+.venv/bin/python tools/s5p6818_emu.py --send '\nmmc dev 1\nmmc info\n'   # 自动输入 u-boot 命令
+.venv/bin/python tools/s5p6818_emu.py --bl1 other/bl1.bin --next other/u-boot-direct.img
+.venv/bin/python tools/s5p6818_emu.py --sd-image sd.img    # 直接用一个 SD 卡原始镜像
+```
+
+`--send` 的第一个字节只用来打断 autoboot 倒计时，会被吃掉，所以开头放一个 `\n`。
+SD 卡在 u-boot 里是 `mmc 1`；`mmc 0`（eMMC）没接东西，所以 autoboot 会失败，这是正常的。
+
+**看输出**。客户机的串口输出原样打印，模拟器自己的信息以 `[emu]` 开头（镜像头、SD
+读取、CPU0 复位、进入 u-boot、u-boot 重定位）。以下情况会结束运行：
+
+- 客户机在等控制台输入（比如停在 u-boot 提示符）——退出码 0
+- 超过 `--timeout` 秒（默认 30）——退出码 0
+- `--hang-seconds`（默认 5）秒内既没有串口输出也没有读 SD，或者客户机出错（访问未映射
+  地址、未定义指令、SMC 等）——退出码 1，并打印寄存器、调用栈和 PC 附近的反汇编
+
+模拟器里 DDR 门控训练总是打印 fail，副核会被报告为 dead；BL1 会照常往下走，这两处都
+不是真问题。
+
+**调试选项**：`--trace`（打印进入的每个函数/标号）、`--trace-sd`（SD 命令和响应）、
+`--log-mmio`（每次外设寄存器访问及对应 PC）、`--elf`/`--uboot-elf`（指定其他符号文件）。
+
 ### 目录结构
 
 ```
@@ -186,7 +280,7 @@ workflow artifact 上传——看上面的徽章，或者 `.github/workflows/bui
 │   └── module
 ├── nsih-generator    # 基于 Excel 的 NSIH 头生成工具（Windows）
 ├── reference-nsih    # 各板子的参考 NSIH 文本
-└── tools             # write_sdcard.py
+└── tools             # write_sdcard.py、s5p6818_emu.py
 ```
 
 关键文件：
