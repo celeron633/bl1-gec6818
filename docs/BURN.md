@@ -216,6 +216,8 @@ To undo, write the backup back:
   `Failed to load BL31`, because the emulator has no eMMC. With 0 it
   reaches the u-boot prompt.
 
+---
+
 ## 中文
 
 先用 SD 卡把启动链测通（`tools/write_sdcard.py`，见 README），再按本文把同一条

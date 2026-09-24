@@ -157,7 +157,7 @@ python3 -m venv .venv && .venv/bin/pip install unicorn capstone
 | [docs/EMULATOR.md](docs/EMULATOR.md) | the emulator |
 | [docs/BURN.md](docs/BURN.md) | writing the SD-tested chain to eMMC, from u-boot (TFTP) or Linux (`dd`) |
 
-The docs are in Chinese, except EMULATOR.md and BURN.md, which are in both languages.
+All docs are in both English and Chinese.
 
 ### Source tree
 
@@ -335,7 +335,7 @@ python3 -m venv .venv && .venv/bin/pip install unicorn capstone
 | [docs/EMULATOR.md](docs/EMULATOR.md) | 模拟器 |
 | [docs/BURN.md](docs/BURN.md) | 把在 SD 卡上测通的链路写到 eMMC：u-boot 里用 TFTP，或 Linux 里用 `dd` |
 
-除了 EMULATOR.md 和 BURN.md 是中英双语，其他文档都是中文。
+所有文档都是中英双语。
 
 ### 目录结构
 
