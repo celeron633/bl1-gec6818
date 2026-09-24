@@ -106,32 +106,80 @@ extern U32 GetCurrentSMode(void);
 
 void simple_memtest(U32 *pStart, U32 *pEnd);
 
+#if (defined(SKIP_ATF) && defined(aarch32) && !defined(UBOOT_AARCH32)) || \
+	(!defined(SKIP_ATF) && defined(aarch64))
+/*
+ * Warm-reset CPU0 into AArch64 EL3 at 'entry', the same TIEOFF +
+ * warm-reset trick BootROM's NSIH vector uses to start an AArch64 BL1.
+ * SRAM, DDR and the peripherals survive the reset. BL1 runs with the MMU
+ * off, so its data accesses were never cached and nothing needs flushing.
+ */
+static void ResetCPU0ToAArch64(U32 entry)
+{
+	U32 temp = 0x10000000;
+
+	while (!DebugIsUartTxDone() && temp--)
+		;
+
+	SetIO32(&pReg_Tieoff->TIEOFFREG[79], 1 << 12);	// CPU0 AArch64
+	WriteIO32(&pReg_Tieoff->TIEOFFREG[80], entry >> 2); // CPU0 RVBAR
+	while (ReadIO32(&pReg_Tieoff->TIEOFFREG[80]) != entry >> 2)
+		;
+	SetIO32(&pReg_ClkPwr->CPUWARMRESETREQ, 1);	// CPU0 warm reset
+	while (1)
+		__asm__ __volatile__("wfi");
+}
+#endif
+
 #if defined(SKIP_ATF) && defined(aarch32) && !defined(UBOOT_AARCH32)
 /*
- * Reset CPU0 into AArch64 at the stage2 stub (STAGE2_AARCH64_ADDR), the
- * same TIEOFF + warm-reset trick BootROM's NSIH vector uses to start an
- * AArch64 BL1. u-boot's entry goes through SRAM, which survives the
- * reset. No MMU/D-cache in this build, so nothing needs flushing.
+ * Reset CPU0 into AArch64 at the stage2 stub (STAGE2_AARCH64_ADDR).
+ * u-boot's entry goes through SRAM, which survives the reset.
  */
 static void LaunchStage2(U32 entry)
 {
 	volatile U32 *handoff = (volatile U32 *)STAGE2_HANDOFF_ADDR;
-	U32 temp;
 
 	handoff[1] = entry;
 	handoff[0] = STAGE2_AARCH64_SIGNATURE;
 
 	SYSMSG("reset CPU0 into AArch64 stage2 @0x%08X, u-boot entry 0x%08X\r\n",
 	       STAGE2_AARCH64_ADDR, entry);
-	temp = 0x10000000;
-	while (!DebugIsUartTxDone() && temp--)
-		;
+	ResetCPU0ToAArch64(STAGE2_AARCH64_ADDR);
+}
+#endif
 
-	SetIO32(&pReg_Tieoff->TIEOFFREG[79], 1 << 12);	// CPU0 AArch64
-	WriteIO32(&pReg_Tieoff->TIEOFFREG[80], STAGE2_AARCH64_ADDR >> 2); // CPU0 RVBAR
-	SetIO32(&pReg_ClkPwr->CPUWARMRESETREQ, 1);	// CPU0 warm reset
-	while (1)
-		__asm__ __volatile__("wfi");
+#if !defined(SKIP_ATF) && defined(aarch64)
+/*
+ * The prebuilt fip-loader.img was made for the vendor's AArch32 BL1: its
+ * StartAddr is a small AArch32 stub - A32 "b", then "BOOTMAGICNUMBER!" -
+ * that points CPU0's RVBAR at ATF BL2's real, AArch64 EL3 entry and
+ * warm-resets CPU0 into it. This BL1 is already AArch64 and can't run it,
+ * so find the entry the stub would load into RVBAR ("ldr r6, [pc, #imm];
+ * lsr r6, r6, #2") and do the reset itself.
+ *
+ * Returns that entry, or 0 if 'start' isn't such a stub.
+ */
+static U32 AtfLoaderEntry64(U32 start)
+{
+	const volatile U32 *p = (const volatile U32 *)(MPTRS)start;
+	U32 code, insn, i;
+
+	if ((p[0] & 0xFF000000) != 0xEA000000 ||	// b (always)
+	    p[1] != 0x544F4F42 || p[2] != 0x4947414D ||	// "BOOTMAGI"
+	    p[3] != 0x4D554E43 || p[4] != 0x21524542)	// "CNUMBER!"
+		return 0;
+
+	code = start + 8 + ((S32)(p[0] << 8) >> 6);
+	p = (const volatile U32 *)(MPTRS)code;
+	for (i = 0; i < 64; i++) {
+		insn = p[i];
+		if ((insn & 0xFFFFF000) == 0xE59F6000 &&	// ldr r6, [pc, #imm]
+		    p[i + 1] == 0xE1A06126)			// lsr r6, r6, #2
+			return *(const volatile U32 *)(MPTRS)
+				(code + i * 4 + 8 + (insn & 0xFFF));
+	}
+	return 0;
 }
 #endif
 
@@ -564,6 +612,19 @@ void BootMain(U32 CPUID)
 		/* u-boot is AArch64 and wants a resident EL3 for PSCI: hand
 		 * over to the AArch64 stage2 instead of jumping there. */
 		LaunchStage2(pTBI->LAUNCHADDR);
+#endif
+#if !defined(SKIP_ATF) && defined(aarch64)
+		{
+			U32 bl2 = AtfLoaderEntry64(pTBI->LAUNCHADDR);
+
+			/* no stub: an AArch64 image, entered at EL3 below */
+			if (bl2) {
+				SYSMSG("0x%08X is an AArch32 loader stub, reset "
+				       "CPU0 into its AArch64 entry 0x%08X\r\n",
+				       (MPTRS)pLaunch, bl2);
+				ResetCPU0ToAArch64(bl2);
+			}
+		}
 #endif
 		/* UBOOT_AARCH32: a 32-bit u-boot is entered directly, in
 		 * secure SVC mode like BL1 itself. */

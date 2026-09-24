@@ -30,7 +30,7 @@ BootROM -> BL1（本仓库，SRAM）
              |
              v  在 DEVICEADDR（SD/eMMC 字节偏移 0x10200）读 NSIH2
         fip-loader.img            <- LoadAddr 0x7FCC0000，StartAddr 0x7FD00800
-             |                       （入口是 AArch32 代码，内含 ARM Trusted Firmware BL2）
+             |                       （入口是 AArch32 跳板，BL2 本体是 AArch64，入口 0x7FD01000）
              v  BL2 按自己写死的 FIP 偏移加载，不经过 BL1 的 NSIH
         fip-secure.img            <- FIP：BL31（安全监控 / PSCI）+ BL32（OP-TEE）
              |
@@ -47,9 +47,20 @@ BootROM -> BL1（本仓库，SRAM）
 负责响应内核的 PSCI SMC 调用（设备树里的 `psci { method = "smc"; }`），
 包括副核启动、`reboot`、`poweroff`、cpuidle 等。
 
-`fip-loader.img` 的入口（StartAddr 0x7FD00800，文件偏移 0x40800）是一条
-AArch32 `b` 指令，后面跟着 `"BOOTMAGICNUMBER!"`，所以 **BL1 跳过去时必须处于
-AArch32**，也就是要用 `OPMODE=aarch32` 编译。
+`fip-loader.img` 的入口（StartAddr 0x7FD00800，文件偏移 0x40800）是一段
+AArch32 跳板：一条 `b` 指令，后面跟着 `"BOOTMAGICNUMBER!"`。它把 CPU0 的
+RVBAR 设成 0x7FD01000，打开 TIEOFF 里 CPU0 的 AArch64 位，再热复位 CPU0。
+0x7FD01000 才是真正的 ATF BL2，是 AArch64 EL3 代码。这个跳板是给厂商的 BL1
+（`prebuilt/bl1-mmcboot.bin`，AArch32）准备的。
+
+两种 `OPMODE` 都能走这条链：
+
+- `OPMODE=aarch32`：和厂商一样，BL1 直接跳到 StartAddr，由跳板完成切换。
+- `OPMODE=aarch64`：BL1 执行不了 AArch32 跳板。它在 StartAddr 处认出跳板，
+  从跳板的 `ldr r6, [pc, #imm]; lsr r6, r6, #2` 取出它要写进 RVBAR 的地址，
+  然后自己做同样的 TIEOFF 设置和热复位（`AtfLoaderEntry64()`、
+  `ResetCPU0ToAArch64()`，`src/secondboot.c`）。StartAddr 处如果不是这种跳板，
+  就当作 AArch64 镜像，在 EL3 直接跳过去。
 
 SD/eMMC 上的布局（字节偏移，来自 `u-boot_gec6818` 的
 `include/configs/artik710_raptor.h` 中的 `CONFIG_DFU_ALT`）：
@@ -66,6 +77,7 @@ SD/eMMC 上的布局（字节偏移，来自 `u-boot_gec6818` 的
 ```
 make clean && make OPMODE=aarch32 SKIP_ATF=n CROSS_TOOL=<arm-linux-gnueabi- 前缀>
 make clean && make OPMODE=aarch32 SKIP_ATF=n CROSS_TOOL=... BOOT_PORT=emmc   # 改成从 eMMC 启动，见 NSIH.md
+make clean && make SKIP_ATF=n                                                # AArch64 BL1
 ```
 
 u-boot 照常编译（`u-boot_gec6818/Makefile` 的 `fip-nonsecure.img` 目标）。

@@ -6,7 +6,7 @@ root, which config.mak includes ahead of its own ?= defaults; variables
 given on the make command line still override it.
 
 Invalid combinations (see docs/BOOT_MODES.md) can't be picked: e.g.
-SKIP_ATF=n and UBOOT_ARCH=aarch32 only exist for OPMODE=aarch32.
+UBOOT_ARCH=aarch32 only exists for OPMODE=aarch32 SKIP_ATF=y.
 
 Usage:
   make menuconfig
@@ -31,12 +31,13 @@ OPTIONS = [
     ("OPMODE", "choice", "aarch64", ["aarch64", "aarch32"],
      "Instruction set BL1 is built for. aarch64: the NSIH vector resets "
      "the core into AArch64 and BL1 itself stays resident at EL3 for PSCI. "
-     "aarch32: needed for the ATF chain (SKIP_ATF=n) and the pure 32-bit "
-     "chain; with an AArch64 u-boot, an AArch64 stage2 is appended to BL1."),
+     "aarch32: the vendor's choice, and needed for the pure 32-bit chain; "
+     "with SKIP_ATF=y and an AArch64 u-boot, an AArch64 stage2 is appended "
+     "to BL1."),
     ("SKIP_ATF", "choice", "y", ["y", "n"],
      "y: BL1 jumps straight to u-boot-direct.img and provides PSCI itself "
      "(src/psci.c). n: the prebuilt fip-loader/fip-secure (ATF BL2/BL31 + "
-     "OP-TEE) chain, which needs OPMODE=aarch32."),
+     "OP-TEE) chain, with either OPMODE."),
     ("UBOOT_ARCH", "choice", "aarch64", ["aarch64", "aarch32"],
      "Whether the u-boot BL1 jumps to is AArch64 or AArch32. aarch32 needs "
      "OPMODE=aarch32: BL1 jumps to a 32-bit u-boot in secure SVC - no "
@@ -77,8 +78,6 @@ BY_NAME = {o[0]: o for o in OPTIONS}
 def allowed(cfg, name):
     """Values an option may take given the rest of the config."""
     choices = BY_NAME[name][3]
-    if name == "SKIP_ATF" and cfg["OPMODE"] != "aarch32":
-        return ["y"]
     if name == "UBOOT_ARCH" and (cfg["OPMODE"], cfg["SKIP_ATF"]) != ("aarch32", "y"):
         return ["aarch64"]
     return choices
@@ -109,8 +108,6 @@ def label(cfg, name):
 
 
 def lock_reason(cfg, name):
-    if name == "SKIP_ATF":
-        return "(n needs OPMODE=aarch32)"
     return "(aarch32 needs OPMODE=aarch32, SKIP_ATF=y)"
 
 

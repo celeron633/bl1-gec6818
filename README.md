@@ -38,7 +38,7 @@ u-boot that a `SKIP_ATF=y` BL1 jumps to is 64- or 32-bit:
 | `aarch32` | `n` | BL1 → `fip-loader.img` → `fip-secure.img` (BL31+OP-TEE) → u-boot → Linux | BL31 | `fip-loader.img` (its entry is AArch32 code) | `fip-loader.img` |
 | `aarch32` | `y` | BL1 → stage2 → u-boot → Linux | stage2, resident in SRAM at EL3 (`src/stage2_main.c`, `src/psci.c`) | BL1, by warm-resetting CPU0 into stage2 | `u-boot-direct.img` |
 | `aarch64` | `y` | BL1 → u-boot → Linux | BL1 itself, resident at EL3 (`src/psci.c`) | BootROM, via the NSIH header's vector, before BL1 runs | `u-boot-direct.img` |
-| `aarch64` | `n` | not usable: BL1 would jump into `fip-loader.img`'s AArch32 entry in AArch64 | | | |
+| `aarch64` | `n` | BL1 → `fip-loader.img` → `fip-secure.img` (BL31+OP-TEE) → u-boot → Linux | BL31 | BootROM, via the NSIH header's vector; BL1 then warm-resets CPU0 into BL2's AArch64 entry instead of running `fip-loader.img`'s AArch32 stub | `fip-loader.img` |
 | `aarch32` | `y`, `UBOOT_ARCH=aarch32` | BL1 → 32-bit u-boot → (old 32-bit kernel), all in AArch32 secure SVC | none | never | 32-bit `u-boot-direct.img` |
 
 The default (`config.mak`) is `OPMODE=aarch64 SKIP_ATF=y`. The two
@@ -80,6 +80,7 @@ Makefile doesn't track CFLAGS changes):
 make clean && make                                                           # default: no ATF, AArch64 BL1
 make clean && make OPMODE=aarch32 CROSS_TOOL=arm-linux-gnueabi-              # no ATF, via stage2
 make clean && make OPMODE=aarch32 SKIP_ATF=n CROSS_TOOL=arm-linux-gnueabi-   # ATF chain
+make clean && make SKIP_ATF=n                                                # ATF chain, AArch64 BL1
 make clean && make OPMODE=aarch32 UBOOT_ARCH=aarch32 CROSS_TOOL=arm-linux-gnueabi-   # pure AArch32, 32-bit u-boot
 ```
 
@@ -256,7 +257,7 @@ SD/eMMC 再读一个镜像并跳过去——要么走正常的 ARM Trusted Firmw
 | `aarch32` | `n` | BL1 → `fip-loader.img` → `fip-secure.img`（BL31+OP-TEE）→ u-boot → Linux | BL31 | `fip-loader.img`（它的入口是 AArch32 代码） | `fip-loader.img` |
 | `aarch32` | `y` | BL1 → stage2 → u-boot → Linux | stage2，常驻 SRAM、运行在 EL3（`src/stage2_main.c`、`src/psci.c`） | BL1 热复位 CPU0 进入 stage2 | `u-boot-direct.img` |
 | `aarch64` | `y` | BL1 → u-boot → Linux | BL1 自己，常驻 EL3（`src/psci.c`） | BootROM 执行 NSIH 头里的向量，BL1 运行之前就已切换 | `u-boot-direct.img` |
-| `aarch64` | `n` | 不可用：BL1 会以 AArch64 跳进 `fip-loader.img` 的 AArch32 入口 | | | |
+| `aarch64` | `n` | BL1 → `fip-loader.img` → `fip-secure.img`（BL31+OP-TEE）→ u-boot → Linux | BL31 | BootROM 执行 NSIH 头里的向量；BL1 不跑 `fip-loader.img` 的 AArch32 跳板，自己热复位 CPU0 进 BL2 的 AArch64 入口 | `fip-loader.img` |
 | `aarch32` | `y`，`UBOOT_ARCH=aarch32` | BL1 → 32 位 u-boot →（老的 32 位内核），全程 AArch32 安全态 SVC | 无 | 不切换 | 32 位的 `u-boot-direct.img` |
 
 默认配置（`config.mak`）是 `OPMODE=aarch64 SKIP_ATF=y`。两种 `SKIP_ATF=y` 配置都还没上板验证，
