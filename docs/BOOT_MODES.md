@@ -225,6 +225,7 @@ tools/write_sdcard.py --device /dev/sdX --mode direct \
 
 用一张备用 SD 卡测试。eMMC 上地址写错可能导致板子变砖
 （`u-boot_gec6818/README.md` 对 32 位 u-boot 也有同样的警告）。
+SD 卡上测通之后怎么写到 eMMC（两种模式都有），见 [BURN.md](BURN.md)。
 
 ### 启动不起来时
 

@@ -118,8 +118,10 @@ tools/write_sdcard.py --device /dev/sdX --mode atf --bl1 out/bl1-gec6818.bin \
 ```
 
 It refuses mounted devices and asks you to type the device path again before
-writing. `--dry-run` only shows the plan. **Test on a spare SD card, not eMMC.**
-Wrong offsets on eMMC can brick the board.
+writing. `--dry-run` only shows the plan. **Test on a spare SD card first.**
+Once the chain boots from SD, write it to the eMMC as described in
+[docs/BURN.md](docs/BURN.md). The eMMC images need a different port number,
+and wrong offsets there can brick the board.
 
 ### LCD boot screen
 
@@ -153,8 +155,9 @@ python3 -m venv .venv && .venv/bin/pip install unicorn capstone
 | [docs/NSIH.md](docs/NSIH.md) | the header BootROM reads to load BL1; switching between SD and eMMC boot (`tools/set_boot_port.py`) |
 | [docs/SMP_PSCI.md](docs/SMP_PSCI.md) | how BL1's PSCI brings up the secondary CPUs |
 | [docs/EMULATOR.md](docs/EMULATOR.md) | the emulator |
+| [docs/BURN.md](docs/BURN.md) | writing the SD-tested chain to eMMC, from u-boot (TFTP) or Linux (`dd`) |
 
-The docs are in Chinese, except EMULATOR.md, which is in both languages.
+The docs are in Chinese, except EMULATOR.md and BURN.md, which are in both languages.
 
 ### Source tree
 
@@ -296,7 +299,8 @@ tools/write_sdcard.py --device /dev/sdX --mode atf --bl1 out/bl1-gec6818.bin \
 ```
 
 它拒绝写已挂载的设备，写之前要求再输入一遍设备路径确认；`--dry-run` 只显示
-计划。**先在备用 SD 卡上测，别碰 eMMC**，eMMC 上偏移写错有变砖的风险。
+计划。**先在备用 SD 卡上测。** SD 卡上跑通后，再按 [docs/BURN.md](docs/BURN.md)
+写到 eMMC：eMMC 用的镜像端口号不一样，而且偏移写错有变砖的风险。
 
 ### LCD 启动画面
 
@@ -329,8 +333,9 @@ python3 -m venv .venv && .venv/bin/pip install unicorn capstone
 | [docs/NSIH.md](docs/NSIH.md) | BootROM 加载 BL1 用的头格式；切换 SD/eMMC 启动（`tools/set_boot_port.py`） |
 | [docs/SMP_PSCI.md](docs/SMP_PSCI.md) | BL1 的 PSCI 怎么启动副核 |
 | [docs/EMULATOR.md](docs/EMULATOR.md) | 模拟器 |
+| [docs/BURN.md](docs/BURN.md) | 把在 SD 卡上测通的链路写到 eMMC：u-boot 里用 TFTP，或 Linux 里用 `dd` |
 
-除了 EMULATOR.md 是中英双语，其他文档都是中文。
+除了 EMULATOR.md 和 BURN.md 是中英双语，其他文档都是中文。
 
 ### 目录结构
 
