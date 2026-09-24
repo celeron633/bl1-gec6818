@@ -113,7 +113,7 @@ BL1（AArch32，SRAM 0xFFFF0200）   时钟、DDR、CCI、TZPC/TZASC/GIC 安全�
    |     复位地址 0xFFFF9000，然后 CPU0 热复位
    v
 stage2（AArch64 EL3，SRAM 0xFFFF9000，常驻）   src/stage2_main.c
-   |  EL3 向量表 + PSCI（src/psci.c），副核上电后停在 EL3 等 PSCI CPU_ON，
+   |  EL3 向量表 + PSCI（src/psci.c），副核保持断电，等 PSCI CPU_ON 再上电，
    |  最后 eret 进入 EL2 非安全态
    v
 u-boot（AArch64 EL2，0x43C00000）-> Linux（PSCI 的 SMC 由 stage2 处理）
@@ -129,9 +129,12 @@ CPU_OFF、AFFINITY_INFO、CPU_SUSPEND（只支持 standby，设备树里也只�
 MIGRATE_INFO_TYPE、SYSTEM_RESET、SYSTEM_OFF（只是停住，没有通过 PMIC 断电）。
 其他函数一律返回 NOT_SUPPORTED，这是 SMCCC 的要求。
 
-处于 "off" 状态的 CPU 并不真正断电，只是在 EL3 里 wfi 等待；CPU_ON 通过
-SGI1 唤醒它。cluster1 的核 MPIDR 是 0x100~0x103（`CONFIG_RESET_AFFINITY_ID`），
-内部编号为 CPU 4~7。
+副核在启动时不上电。内核发 CPU_ON 时，`cpuOn()` 先把入口地址写进这个核的
+slot，再给它上电；副核从 `Startup` 进来，打开自己簇的 CCI 端口，看到 slot 已经
+就绪就直接 eret 进内核。和厂商 BL31 的做法一样，原因和过程见
+[SMP_PSCI.md](SMP_PSCI.md)。CPU_OFF 不会真正断电，核在 EL3 里 wfi 等待。
+cluster1 的核 MPIDR 是 0x100~0x103（`CONFIG_RESET_AFFINITY_ID`），内部编号为
+CPU 4~7。
 
 ### 编译
 
@@ -154,7 +157,7 @@ make u-boot-direct.img            # 不是 fip-nonsecure.img，原因见下
 
 BootROM 执行 NSIH 头里的向量，直接把核心复位成 AArch64、从 0xFFFF0200 开始跑
 BL1，所以不需要 stage2：BL1 本身常驻 EL3 处理 PSCI（同一份 `src/psci.c`），
-副核上电后停在 EL3，最后由 `EnterNonSecure()` 从 EL3 直接 eret 到 u-boot（EL2 非安全态）。u-boot 镜像
+副核等 CPU_ON 时再上电（同上），最后由 `EnterNonSecure()` 从 EL3 直接 eret 到 u-boot（EL2 非安全态）。u-boot 镜像
 （`u-boot-direct.img`）和烧录方式与上面相同，只需一套 `aarch64-none-elf` 工具链：
 
 ```
