@@ -55,7 +55,7 @@ import zlib
 
 from unicorn import (Uc, UcError, UC_ARCH_ARM, UC_ARCH_ARM64, UC_MODE_ARM,
                      UC_PROT_ALL, UC_HOOK_BLOCK, UC_HOOK_INTR,
-                     UC_HOOK_MEM_UNMAPPED)
+                     UC_HOOK_MEM_UNMAPPED, UC_ERR_INSN_INVALID)
 from unicorn import arm_const as A32
 from unicorn import arm64_const as A64
 
@@ -1047,6 +1047,24 @@ def smc_to_el3(board, uc):
             f"return to {board.syms(pc)}")
 
 
+def a32_rmr_write(board):
+    """AArch32 `mcr p15, 0, rX, c12, c0, 2` (RMR), which Unicorn rejects
+    as an invalid instruction. fip-loader.img's entry stub writes AA64=1
+    there before its CPUWARMRESETREQ; the reset itself, and its AArch64
+    state, come from CLKPWR and TIEOFF here, as on the chip. So skip it."""
+    if board.aarch64:
+        return False
+    pc = board.uc.reg_read(A32.UC_ARM_REG_PC)
+    try:
+        insn, = struct.unpack("<I", board.mem_read(pc, 4))
+    except ValueError:
+        return False
+    if insn & 0x0FFF0FFF != 0x0E0C0F50:
+        return False
+    board.uc.reg_write(A32.UC_ARM_REG_PC, pc + 4)
+    return True
+
+
 def warm_reset(board):
     aarch64 = bool(board.regs.get(TIEOFF + TIEOFF_AARCH64, 0) & (1 << 12))
     if aarch64:
@@ -1130,6 +1148,9 @@ def run(board, info, entry):
                 board.uc.emu_start(begin, 0xFFFFFFFFFFFFFFFF if board.aarch64
                                    else 0xFFFFFFFF)
             except UcError as e:
+                if e.errno == UC_ERR_INSN_INVALID and a32_rmr_write(board):
+                    pc = board.pc()
+                    continue
                 board.stop_reason = f"{e}" + (f" - {board.stop_reason}"
                                               if board.stop_reason else "")
             if board.reset_request and not board.stop_reason:
